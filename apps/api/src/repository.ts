@@ -12,6 +12,9 @@ type WatchlistDocument = {
 	companyLogo?: string;
 	addedAt: string;
 	lastSyncedAt?: string;
+	lastAnnouncementAt?: string;
+	backfillCompletedAt?: string;
+	syncStatus?: WatchlistSymbol["syncStatus"];
 	syncError?: string;
 };
 
@@ -40,7 +43,19 @@ export interface LifecycleRepository {
 		companyLogo?: string,
 	): Promise<WatchlistSymbol>;
 	removeSymbol(symbol: string): Promise<boolean>;
-	setSyncResult(symbol: string, error?: string): Promise<void>;
+	setSyncState(
+		symbol: string,
+		update: Partial<
+			Pick<
+				WatchlistSymbol,
+				| "lastSyncedAt"
+				| "lastAnnouncementAt"
+				| "backfillCompletedAt"
+				| "syncStatus"
+				| "syncError"
+			>
+		>,
+	): Promise<void>;
 	upsertAnnouncements(announcements: SourceAnnouncement[]): Promise<number>;
 	listAnnouncements(symbol: string): Promise<SourceAnnouncement[]>;
 	replaceLifecycles(
@@ -115,7 +130,9 @@ export class MongoLifecycleRepository implements LifecycleRepository {
 		companyName: string,
 		companyLogo?: string,
 	): Promise<WatchlistSymbol> {
-		const identity = companyLogo ? { companyName, companyLogo } : { companyName };
+		const identity = companyLogo
+			? { companyName, companyLogo }
+			: { companyName };
 		const row = await this.watchlist
 			.findOneAndUpdate(
 				{ _id: symbol },
@@ -136,21 +153,30 @@ export class MongoLifecycleRepository implements LifecycleRepository {
 			.lean()
 			.exec();
 		if (!removed) return false;
-		await Promise.all([
-			this.announcements.deleteMany({ symbol }).exec(),
-			this.lifecycles.deleteMany({ symbol }).exec(),
-		]);
+		await this.lifecycles.deleteMany({ symbol }).exec();
 		return true;
 	}
 
-	async setSyncResult(symbol: string, error?: string): Promise<void> {
-		const sync = { lastSyncedAt: new Date().toISOString() };
+	async setSyncState(
+		symbol: string,
+		update: Partial<
+			Pick<
+				WatchlistSymbol,
+				| "lastSyncedAt"
+				| "lastAnnouncementAt"
+				| "backfillCompletedAt"
+				| "syncStatus"
+				| "syncError"
+			>
+		>,
+	): Promise<void> {
+		const { syncError, ...fields } = update;
 		await this.watchlist
 			.updateOne(
 				{ _id: symbol },
-				error
-					? { $set: { ...sync, syncError: error } }
-					: { $set: sync, $unset: { syncError: "" } },
+				syncError
+					? { $set: { ...fields, syncError } }
+					: { $set: fields, $unset: { syncError: "" } },
 			)
 			.exec();
 	}
@@ -249,6 +275,12 @@ const watchlistSchema = new Schema<WatchlistDocument>(
 		companyLogo: { type: String, trim: true },
 		addedAt: { type: String, required: true },
 		lastSyncedAt: { type: String },
+		lastAnnouncementAt: { type: String },
+		backfillCompletedAt: { type: String },
+		syncStatus: {
+			type: String,
+			enum: ["pending", "backfilling", "live", "degraded"],
+		},
 		syncError: { type: String },
 	},
 	{ collection: "lifecycle_watchlist", versionKey: false },
@@ -273,7 +305,7 @@ const lifecycleSchema = new Schema<LifecycleDocument>(
 		updatedAt: { type: Date, required: true },
 		data: { type: Schema.Types.Mixed, required: true },
 	},
-	{ collection: "corporate_action_lifecycles", versionKey: false },
+	{ collection: "corporate_action_lifecycles_v2", versionKey: false },
 );
 lifecycleSchema.index({ symbol: 1, updatedAt: -1 });
 
@@ -284,6 +316,9 @@ function mapWatchlistDocument(row: WatchlistDocument): WatchlistSymbol {
 		companyLogo: row.companyLogo,
 		addedAt: row.addedAt,
 		lastSyncedAt: row.lastSyncedAt,
+		lastAnnouncementAt: row.lastAnnouncementAt,
+		backfillCompletedAt: row.backfillCompletedAt,
+		syncStatus: row.syncStatus,
 		syncError: row.syncError,
 	};
 }

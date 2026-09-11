@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY apps/api/package.json apps/api/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
-RUN bun install --frozen-lockfile || (bun pm cache rm && bun install --frozen-lockfile)
+RUN bun install --frozen-lockfile --network-concurrency=8 --no-progress
 
 FROM node:24-alpine AS build
 WORKDIR /app
@@ -12,7 +12,9 @@ WORKDIR /app
 COPY . .
 COPY --from=dependencies /app/node_modules ./node_modules
 ARG API_INTERNAL_URL=http://api:4000
+ARG NEXT_PUBLIC_LIFECYCLE_WS_URL=ws://localhost:4000/ws/lifecycles
 ENV API_INTERNAL_URL=$API_INTERNAL_URL \
+	NEXT_PUBLIC_LIFECYCLE_WS_URL=$NEXT_PUBLIC_LIFECYCLE_WS_URL \
     SKIP_ENV_VALIDATION=true \
     MONGODB_URI=mongodb://unused:27017/corporate_actions \
     MONGODB_MAX_POOL_SIZE=10

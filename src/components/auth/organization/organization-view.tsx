@@ -29,6 +29,36 @@ export type OrganizationViewProps = {
 	organization?: Partial<Organization>;
 };
 
+function isOrganizationViewPending({
+	isPending,
+	hasProvidedOrganization,
+	activeOrganizationPending,
+	hideRole,
+	organizationId,
+	membersPending,
+}: {
+	isPending?: boolean;
+	hasProvidedOrganization: boolean;
+	activeOrganizationPending: boolean;
+	hideRole?: boolean;
+	organizationId?: string;
+	membersPending: boolean;
+}): boolean {
+	return Boolean(
+		isPending ||
+			(!hasProvidedOrganization && activeOrganizationPending) ||
+			(!hideRole && organizationId && membersPending),
+	);
+}
+
+function logoClassName(size: OrganizationLogoSize): string | undefined {
+	return size === "sm" ? "size-5" : undefined;
+}
+
+function logoSize(size: OrganizationLogoSize): OrganizationLogoSize {
+	return size === "lg" ? "md" : "sm";
+}
+
 /**
  * Compact organization row: logo, primary name, secondary slug — analogous to `UserView`.
  */
@@ -66,9 +96,14 @@ export function OrganizationView({
 	);
 
 	if (
-		isPending ||
-		(!organization && activeOrganizationPending) ||
-		(!hideRole && !!resolvedOrganization?.id && membersPending)
+		isOrganizationViewPending({
+			isPending,
+			hasProvidedOrganization: Boolean(organization),
+			activeOrganizationPending,
+			hideRole,
+			organizationId: resolvedOrganization?.id,
+			membersPending,
+		})
 	) {
 		return (
 			<OrganizationViewSkeleton
@@ -87,8 +122,8 @@ export function OrganizationView({
 		>
 			<OrganizationLogo
 				organization={resolvedOrganization}
-				className={size === "sm" ? "size-5" : undefined}
-				size={size === "lg" ? "md" : "sm"}
+				className={logoClassName(size)}
+				size={logoSize(size)}
 			/>
 
 			<div className="flex min-w-0 flex-col">

@@ -17,6 +17,7 @@ const authViewPaths = emailDeliveryEnabled
 	: {
 			signIn: viewPaths.auth.signIn,
 			signOut: viewPaths.auth.signOut,
+			signUp: viewPaths.auth.signUp,
 		};
 
 export default async function AuthPage({
@@ -31,7 +32,8 @@ export default async function AuthPage({
 	if (!Object.values(authViewPaths).includes(path)) {
 		notFound();
 	}
-	const showIntroduction = path === viewPaths.auth.signIn;
+	const showIntroduction =
+		path === viewPaths.auth.signIn || path === viewPaths.auth.signUp;
 
 	return (
 		<div className="flex min-h-svh flex-1 p-3 sm:p-5">
@@ -53,13 +55,16 @@ export default async function AuthPage({
 						{showIntroduction ? (
 							<div className="grid w-full items-center gap-12 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-20">
 								<section className="max-w-[490px]">
-									<p className="meta uppercase text-ink-3">Operations workspace</p>
+									<p className="meta uppercase text-ink-3">
+										Operations workspace
+									</p>
 									<h1 className="mt-6 text-balance text-[clamp(32px,5vw,52px)] font-medium leading-[1.08] tracking-[-0.04em] text-ink">
 										Move every event from announcement to delivery.
 									</h1>
 									<p className="mt-7 max-w-[43ch] text-pretty text-[15px] leading-[1.7] text-ink-2">
-										A focused desk for normalizing terms, checking exchange data,
-										and publishing corporate actions with a clear audit trail.
+										A focused desk for normalizing terms, checking exchange
+										data, and publishing corporate actions with a clear audit
+										trail.
 									</p>
 								</section>
 								<Auth path={path} />

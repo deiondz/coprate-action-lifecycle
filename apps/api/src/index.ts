@@ -1,5 +1,8 @@
+import { websocket } from "hono/bun";
+
 import { createApp } from "./app";
 import { LifecycleService } from "./lifecycle-service";
+import { createOpenRouterLifecycleValidator } from "./lifecycle-validator";
 import { DrishtiMarketDataSource } from "./market-data";
 import { MongoLifecycleRepository } from "./repository";
 
@@ -13,13 +16,18 @@ const market = apiKey
 			apiKey,
 		})
 	: undefined;
-const service = new LifecycleService(repository, market);
+const service = new LifecycleService(
+	repository,
+	market,
+	createOpenRouterLifecycleValidator(process.env.OPENROUTER_API_KEY),
+);
 const app = createApp(service);
 
 const server = Bun.serve({
 	port: positiveNumber(process.env.PORT, 4000),
 	hostname: process.env.HOST ?? "0.0.0.0",
 	fetch: app.fetch,
+	websocket,
 });
 
 console.log(`Lifecycle API listening on ${server.url}`);

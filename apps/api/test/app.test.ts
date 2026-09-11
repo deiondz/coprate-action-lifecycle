@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { websocket } from "hono/bun";
 
 import { createApp } from "../src/app";
 import type { SourceAnnouncement } from "../src/domain";
@@ -9,19 +10,19 @@ import { MemoryLifecycleRepository } from "./memory-repository";
 class FakeMarketData implements MarketDataSource {
 	readonly announcements: SourceAnnouncement[] = [
 		{
-			id: "tcs-dividend-1",
+			id: "tcs-rights-1",
 			symbol: "TCS",
 			companyName: "Tata Consultancy Services Ltd.",
 			date: "2026-07-09T10:32:27.264Z",
-			headline: "Board approves interim dividend and record date",
-			category: "Dividend",
+			headline: "Board approves rights issue and record date",
+			category: "Rights Issue",
 			relatedCategories: ["Outcome of Board Meeting"],
 			exchange: "NSE",
 			extractedInformation: {
-				dividend: {
-					dividend_amount_rs_per_share: 12,
+				rights_issue: {
+					entitlement_ratio: "1:4",
+					price: 120,
 					record_date: "2026-07-15",
-					ex_date: "2026-07-14",
 				},
 			},
 		},
@@ -40,8 +41,13 @@ class FakeMarketData implements MarketDataSource {
 	async openStream(): Promise<{
 		close(): Promise<void>;
 		connected(): boolean;
+		replaceSymbols(symbols: string[]): Promise<void>;
 	}> {
-		return { close: async () => undefined, connected: () => true };
+		return {
+			close: async () => undefined,
+			connected: () => true,
+			replaceSymbols: async () => undefined,
+		};
 	}
 
 	async getSourceDocument(): Promise<Response> {
@@ -70,7 +76,7 @@ describe("Hono lifecycle API", () => {
 		expect(payload.data[0].announcements).toHaveLength(1);
 		expect(payload.data[0]).toMatchObject({
 			symbol: "TCS",
-			actionType: "Dividend",
+			actionType: "Rights Issue",
 			status: "Record Date",
 		});
 
@@ -123,5 +129,40 @@ describe("Hono lifecycle API", () => {
 		expect(await docs.text()).toContain(
 			"Drishti Corporate Action Lifecycle API",
 		);
+	});
+
+	test("upgrades lifecycle sockets and sends an initial snapshot", async () => {
+		const service = new LifecycleService(new MemoryLifecycleRepository());
+		const app = createApp(service);
+		const server = Bun.serve({ port: 0, fetch: app.fetch, websocket });
+		try {
+			const message = await new Promise<Record<string, unknown>>(
+				(resolve, reject) => {
+					const socket = new WebSocket(
+						`ws://localhost:${server.port}/ws/lifecycles`,
+					);
+					const timeout = setTimeout(
+						() => reject(new Error("Timed out waiting for snapshot")),
+						2_000,
+					);
+					socket.onmessage = (event) => {
+						clearTimeout(timeout);
+						const payload = JSON.parse(String(event.data));
+						socket.close();
+						resolve(payload);
+					};
+					socket.onerror = () => reject(new Error("WebSocket failed"));
+				},
+			);
+
+			expect(message).toMatchObject({
+				type: "snapshot",
+				data: [],
+				symbols: [],
+				stream: "not_configured",
+			});
+		} finally {
+			await server.stop(true);
+		}
 	});
 });

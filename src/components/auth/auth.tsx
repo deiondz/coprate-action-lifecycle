@@ -37,6 +37,47 @@ const AUTH_VIEWS: Partial<Record<AuthView, ComponentType<AuthProps>>> = {
 	verifyEmail: VerifyEmail,
 };
 
+function findAuthViewByPath(
+	viewPaths: ReturnType<typeof useAuth>["viewPaths"],
+	path: string | undefined,
+): AuthView | undefined {
+	return (Object.keys(viewPaths.auth) as AuthView[]).find(
+		(key) => viewPaths.auth[key] === path,
+	);
+}
+
+function findPluginAuthView(
+	plugins: ReturnType<typeof useAuth>["plugins"],
+	view: AuthView | undefined,
+	authView: AuthView | undefined,
+	path: string | undefined,
+) {
+	for (const plugin of plugins) {
+		const pluginAuthPaths = plugin.viewPaths?.auth;
+		const pluginView =
+			view ??
+			authView ??
+			(pluginAuthPaths &&
+				Object.keys(pluginAuthPaths).find(
+					(key) => pluginAuthPaths[key] === path,
+				));
+		if (!pluginView) continue;
+
+		const PluginView = plugin.views?.auth?.[pluginView];
+		if (PluginView) return PluginView;
+	}
+}
+
+function findSignInFallback(
+	plugins: ReturnType<typeof useAuth>["plugins"],
+	authView: AuthView | undefined,
+	isEmailPasswordEnabled: boolean | undefined,
+) {
+	if (authView !== "signIn" || isEmailPasswordEnabled) return undefined;
+	return plugins.find((plugin) => plugin.fallbackViews?.auth?.signIn)
+		?.fallbackViews?.auth?.signIn;
+}
+
 /**
  * Render the appropriate authentication view based on the provided `view` or `path`.
  *
@@ -67,11 +108,7 @@ export function Auth({
 		);
 	}
 
-	const authView =
-		view ||
-		(Object.keys(viewPaths.auth) as AuthView[]).find(
-			(key) => viewPaths.auth[key] === path,
-		);
+	const authView = view || findAuthViewByPath(viewPaths, path);
 
 	// When email + password auth is disabled, password-only views (signUp,
 	// forgotPassword, resetPassword) have no meaning. Redirect them to signIn,
@@ -95,54 +132,10 @@ export function Auth({
 		return null;
 	}
 
-	// 1. Plugin overrides (`views.auth[currentView]`) — first plugin wins,
-	//    including over built-in views. Resolves the view key from `view`,
-	//    then `authView` (built-in path match), then plugin-introduced paths
-	//    (e.g. `magicLink` → `/auth/magic-link`).
-	for (const plugin of plugins) {
-		const pluginAuthPaths = plugin.viewPaths?.auth;
-
-		const pluginView =
-			view ??
-			authView ??
-			(pluginAuthPaths &&
-				Object.keys(pluginAuthPaths).find(
-					(key) => pluginAuthPaths[key] === path,
-				));
-		if (!pluginView) continue;
-
-		const PluginView = plugin.views?.auth?.[pluginView];
-		if (!PluginView) continue;
-
-		return (
-			<PluginView
-				className={className}
-				socialLayout={socialLayout}
-				socialPosition={socialPosition}
-			/>
-		);
-	}
-
-	// 2. Plugin fallbacks — only when the built-in `signIn` isn't viable
-	//    (password auth is off). Used by `magicLinkPlugin` to render the
-	//    magic-link form as the primary passwordless sign-in surface.
-	if (authView === "signIn" && !emailAndPassword?.enabled) {
-		const Fallback = plugins.find(
-			(plugin) => plugin.fallbackViews?.auth?.signIn,
-		)?.fallbackViews?.auth?.signIn;
-
-		if (Fallback) {
-			return (
-				<Fallback
-					className={className}
-					socialLayout={socialLayout}
-					socialPosition={socialPosition}
-				/>
-			);
-		}
-	}
-
-	const AuthView = authView ? AUTH_VIEWS[authView] : undefined;
+	const AuthView =
+		findPluginAuthView(plugins, view, authView, path) ??
+		findSignInFallback(plugins, authView, emailAndPassword?.enabled) ??
+		(authView ? AUTH_VIEWS[authView] : undefined);
 
 	if (!AuthView) {
 		throw new Error(

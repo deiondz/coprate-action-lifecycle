@@ -60,6 +60,17 @@ describe("corporate-action lifecycle engine", () => {
 			newValue: "18 Feb 2026",
 			announcementId: "a5",
 		});
+		expect(
+			result[0].stages.find((stage) => stage.id === "record")?.evidence,
+		).toMatchObject({
+			announcementId: "a3",
+			date: "2026-01-15T10:00:00Z",
+			summary: "Record date for rights entitlement",
+			criticalAspect: "Record Date",
+		});
+		expect(
+			result[0].stages.find((stage) => stage.id === "completed")?.evidence,
+		).toBeUndefined();
 	});
 
 	test("keeps incomplete terms without fabricating values", () => {
@@ -76,6 +87,25 @@ describe("corporate-action lifecycle engine", () => {
 
 		expect(result.terms.map((term) => term.key)).toEqual(["rights_ratio"]);
 		expect(result.nextExpectedDate).toBeUndefined();
+	});
+
+	test("uses the concise filing summary as stage evidence", () => {
+		const filing: SourceAnnouncement = {
+			...announcement(
+				"a1",
+				"2026-01-02T10:00:00Z",
+				"Board approved rights issue",
+			),
+			summary: "Rights issue approved by the board.",
+			longSummary:
+				"### Long filing body that must not appear in the stage tooltip.",
+		};
+
+		const [result] = buildLifecycles([filing]);
+
+		expect(
+			result.stages.find((stage) => stage.id === "board")?.evidence,
+		).toMatchObject({ summary: "Rights issue approved by the board." });
 	});
 
 	test("marks an event as review-only when two lifecycles are plausible", () => {
@@ -95,5 +125,107 @@ describe("corporate-action lifecycle engine", () => {
 		).toMatchObject({
 			state: "needs_review",
 		});
+	});
+
+	test("fans one filing out into multiple core action lifecycles", () => {
+		const filing: SourceAnnouncement = {
+			...announcement(
+				"multi-1",
+				"2026-05-01T10:00:00Z",
+				"Board approved bonus shares and a stock split",
+			),
+			category: "Outcome of Board Meeting",
+			relatedCategories: ["Bonus Issue", "Stock Split"],
+			extractedInformation: {
+				bonus_issue: { bonus_ratio: "1:1", face_value_after: 5 },
+				stock_split: {
+					face_value_before: 10,
+					face_value_after: 5,
+					split_ratio: "1:2",
+				},
+			},
+		};
+
+		const result = buildLifecycles([filing]);
+
+		expect(result.map((item) => item.actionType).sort()).toEqual([
+			"Bonus Issue",
+			"Stock Split",
+		]);
+		expect(
+			result
+				.find((item) => item.actionType === "Stock Split")
+				?.terms.find((term) => term.key === "old_face_value"),
+		).toMatchObject({ rawValue: 10, normalizedValue: 10 });
+	});
+
+	test("tracks every supported corporate-action category", () => {
+		const categoryFixtures = [
+			["Bonus Issue", "bonus_issue"],
+			["Buyback", "buyback"],
+			["Conversion of Warrants", "conversion_of_warrants"],
+			["De-listing", "delisting"],
+			["Demerger", "demerger"],
+			["Dividend", "dividend"],
+			["Issue of Securities", "issue_of_securities"],
+			["Merger", "merger"],
+			["Offer for Sale", "offer_for_sale"],
+			["Redemption of Securities", "redemption_of_securities"],
+			["Rights Issue", "rights_issue"],
+			["Stock Split", "stock_split"],
+		] as const;
+
+		const filings = categoryFixtures.map(
+			([category, extractionKey], index) => ({
+				...announcement(
+					`category-${index}`,
+					"2026-05-01T10:00:00Z",
+					`${category} announced`,
+				),
+				category,
+				extractedInformation: {
+					[extractionKey]: { record_date: "2026-05-10" },
+				},
+			}),
+		);
+
+		expect(
+			buildLifecycles(filings)
+				.map((item) => item.actionType)
+				.sort(),
+		).toEqual(categoryFixtures.map(([category]) => category).sort());
+	});
+
+	test("does not auto-promote a text-only generic filing", () => {
+		const generic: SourceAnnouncement = {
+			...announcement(
+				"generic-1",
+				"2026-05-02T10:00:00Z",
+				"The company may consider a rights issue",
+			),
+			category: "Corp Action",
+			relatedCategories: [],
+			summary: "The company may consider a rights issue.",
+			extractedInformation: null,
+		};
+
+		expect(buildLifecycles([generic])).toEqual([]);
+	});
+
+	test("ignores failed extraction values and reuses an existing lifecycle id", () => {
+		const filing = announcement(
+			"failed-1",
+			"2026-05-01T10:00:00Z",
+			"Rights issue announced",
+			{ rights_issue: { status: "failed", price: 120 } },
+		);
+		const [initial] = buildLifecycles([filing], {
+			createId: () => "persistent-id",
+		});
+		const [rebuilt] = buildLifecycles([filing], { existing: [initial] });
+
+		expect(initial.id).toBe("persistent-id");
+		expect(initial.terms).toEqual([]);
+		expect(rebuilt.id).toBe("persistent-id");
 	});
 });

@@ -1,44 +1,70 @@
 import type {
 	CorporateActionLifecycle,
 	LifecycleListResponse,
+	LifecycleSnapshot,
+	LifecycleSocketMessage,
+	LifecycleStreamDetails,
 	LifecycleSummary,
 	WatchlistSymbol,
 } from "@lifecycle/contracts";
 
 import { buildLifecycles, type SourceAnnouncement } from "./domain";
-import type { MarketDataSource } from "./market-data";
+import type { LifecycleValidator } from "./lifecycle-validator";
+import type { MarketDataSource, StreamHandle } from "./market-data";
 import type { LifecycleRepository } from "./repository";
 
-type StreamHandle = { close(): Promise<void>; connected(): boolean };
+const RECOVERY_OVERLAP_MS = 10 * 60 * 1_000;
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+type SocketListener = (message: LifecycleSocketMessage) => void;
 
 export class LifecycleService {
 	private stream?: StreamHandle;
-	private restartingStream?: Promise<void>;
-	private readonly syncs = new Map<
-		string,
-		Promise<CorporateActionLifecycle[]>
-	>();
-	private readonly ingests = new Map<string, Promise<void>>();
+	private streamSetup?: Promise<void>;
+	private readonly pipelines = new Map<string, Promise<unknown>>();
 	private readonly removingSymbols = new Set<string>();
+	private readonly degradedSymbols = new Set<string>();
+	private readonly listeners = new Set<SocketListener>();
+	private activeBackfills = 0;
+	private heartbeat?: ReturnType<typeof setInterval>;
+	private streamDetails: LifecycleStreamDetails;
 
 	constructor(
 		readonly repository: LifecycleRepository,
 		private readonly market?: MarketDataSource,
-	) {}
+		private readonly validator?: LifecycleValidator,
+	) {
+		this.streamDetails = {
+			status: market ? "disconnected" : "not_configured",
+		};
+	}
 
 	async start(): Promise<void> {
+		this.startHeartbeat();
 		if (!this.market) return;
+		await this.ensureStream();
 		await this.syncAll();
-		await this.restartStream();
 	}
 
 	async stop(): Promise<void> {
+		if (this.heartbeat) clearInterval(this.heartbeat);
+		this.heartbeat = undefined;
 		await this.stream?.close();
 		this.stream = undefined;
 	}
 
+	subscribe(listener: SocketListener): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
 	listSymbols(): Promise<WatchlistSymbol[]> {
 		return this.repository.listSymbols();
+	}
+
+	async snapshot(): Promise<LifecycleSnapshot> {
+		const response = await this.listLifecycles();
+		return { ...response, symbols: await this.repository.listSymbols() };
 	}
 
 	async addSymbol(input: string): Promise<WatchlistSymbol> {
@@ -52,22 +78,34 @@ export class LifecycleService {
 			identity.companyName,
 			identity.companyLogo,
 		);
-		await this.syncSymbol(identity.symbol);
-		void this.restartStream();
+		await this.repository.setSyncState(identity.symbol, {
+			syncStatus: saved.backfillCompletedAt ? "live" : "pending",
+		});
+		try {
+			await this.ensureStream();
+			await this.syncSymbol(identity.symbol);
+		} catch (error) {
+			if (!saved.backfillCompletedAt) {
+				await this.repository.removeSymbol(symbol);
+				await this.ensureStream().catch(() => undefined);
+			}
+			await this.broadcastSnapshot();
+			throw error;
+		}
+		await this.broadcastSnapshot();
 		return (await this.repository.getSymbol(identity.symbol)) ?? saved;
 	}
 
 	async removeSymbol(input: string): Promise<boolean> {
 		const symbol = normalizeSymbol(input);
 		this.removingSymbols.add(symbol);
-		const operations: Promise<unknown>[] = [];
-		const sync = this.syncs.get(symbol);
-		const ingest = this.ingests.get(symbol);
-		if (sync) operations.push(sync);
-		if (ingest) operations.push(ingest);
-		await Promise.allSettled(operations);
+		await this.pipelines.get(symbol)?.catch(() => undefined);
 		const removed = await this.repository.removeSymbol(symbol);
-		if (removed) void this.restartStream();
+		if (removed) {
+			this.degradedSymbols.delete(symbol);
+			await this.ensureStream();
+			await this.broadcastSnapshot();
+		}
 		return removed;
 	}
 
@@ -77,15 +115,14 @@ export class LifecycleService {
 			data,
 			summary: summarize(data),
 			stream: this.streamStatus(),
+			streamDetails: { ...this.streamDetails },
 		};
 	}
 
 	streamStatus(): LifecycleListResponse["stream"] {
-		return !this.market
-			? "not_configured"
-			: this.stream?.connected()
-				? "connected"
-				: "disconnected";
+		if (!this.market) return "not_configured";
+		if (this.activeBackfills > 0) return "backfilling";
+		return this.streamDetails.status;
 	}
 
 	getLifecycle(id: string): Promise<CorporateActionLifecycle | undefined> {
@@ -112,103 +149,243 @@ export class LifecycleService {
 		if (this.removingSymbols.has(normalized)) return [];
 		if (!(await this.repository.getSymbol(normalized)))
 			throw new UnknownSymbolError(normalized);
-		const pending = this.syncs.get(normalized);
-		if (pending) return pending;
-
-		const sync = this.performSync(normalized).finally(() => {
-			this.syncs.delete(normalized);
-		});
-		this.syncs.set(normalized, sync);
-		return sync;
+		return this.enqueue(normalized, () => this.performSync(normalized));
 	}
 
 	private async performSync(
 		symbol: string,
 	): Promise<CorporateActionLifecycle[]> {
+		const watched = await this.repository.getSymbol(symbol);
+		if (!watched || this.removingSymbols.has(symbol)) return [];
+		const cutoff = new Date().toISOString();
+		const from = watched.backfillCompletedAt
+			? recoveryStart(watched.lastAnnouncementAt ?? watched.lastSyncedAt)
+			: undefined;
+		this.activeBackfills += 1;
+		await this.repository.setSyncState(symbol, { syncStatus: "backfilling" });
+		this.setStreamState("backfilling");
 		try {
-			let watched = await this.repository.getSymbol(symbol);
-			if (!watched?.companyLogo) {
-				const identity = await this.market?.resolveSymbol(symbol);
-				if (identity) {
-					watched = await this.repository.addSymbol(
-						identity.symbol,
-						identity.companyName,
-						identity.companyLogo,
-					);
-				}
-			}
-			const announcements = (await this.market?.listAnnouncements(symbol))?.map(
-				(announcement) => ({
-					...announcement,
-					companyLogo: announcement.companyLogo ?? watched?.companyLogo,
-				}),
-			);
+			const announcements = (
+				await this.market?.listAnnouncements(symbol, { from, to: cutoff })
+			)?.map((announcement) => ({
+				...announcement,
+				companyLogo: announcement.companyLogo ?? watched.companyLogo,
+			}));
 			if (this.removingSymbols.has(symbol)) return [];
 			await this.repository.upsertAnnouncements(announcements ?? []);
-			const lifecycles = buildLifecycles(
-				await this.repository.listAnnouncements(symbol),
+			const allAnnouncements = await this.repository.listAnnouncements(symbol);
+			const previous = (await this.repository.listLifecycles()).filter(
+				(item) => item.symbol === symbol,
+			);
+			const lifecycles = await this.validateLifecycles(
+				buildLifecycles(allAnnouncements, {
+					existing: previous,
+				}),
 			);
 			await this.repository.replaceLifecycles(symbol, lifecycles);
-			await this.repository.setSyncResult(symbol);
+			const latest = allAnnouncements.at(-1)?.date;
+			await this.repository.setSyncState(symbol, {
+				lastSyncedAt: cutoff,
+				lastAnnouncementAt: latest,
+				backfillCompletedAt: watched.backfillCompletedAt ?? cutoff,
+				syncStatus: "live",
+			});
+			this.degradedSymbols.delete(symbol);
+			this.streamDetails.lastCatchupAt = cutoff;
+			await this.broadcastLifecycleDiff(previous, lifecycles);
 			return lifecycles;
 		} catch (error) {
-			await this.repository.setSyncResult(symbol, publicError(error));
+			this.degradedSymbols.add(symbol);
+			await this.repository.setSyncState(symbol, {
+				lastSyncedAt: cutoff,
+				syncStatus: "degraded",
+				syncError: publicError(error),
+			});
+			this.setStreamState("degraded", publicError(error));
 			throw error;
+		} finally {
+			this.activeBackfills = Math.max(0, this.activeBackfills - 1);
+			if (this.activeBackfills === 0 && this.stream?.connected()) {
+				this.setStreamState(
+					this.degradedSymbols.size > 0 ? "degraded" : "connected",
+				);
+			}
 		}
 	}
 
-	private ingestAnnouncement(announcement: SourceAnnouncement): Promise<void> {
-		const previous = this.ingests.get(announcement.symbol) ?? Promise.resolve();
-		const next = previous
-			.catch(() => undefined)
-			.then(() => this.performIngest(announcement))
-			.finally(() => {
-				if (this.ingests.get(announcement.symbol) === next)
-					this.ingests.delete(announcement.symbol);
-			});
-		this.ingests.set(announcement.symbol, next);
-		return next;
+	private ingestAnnouncement(announcement: SourceAnnouncement): void {
+		void this.enqueue(announcement.symbol, () =>
+			this.performIngest(announcement),
+		).catch((error) => {
+			this.setStreamState("degraded", publicError(error));
+		});
 	}
 
 	private async performIngest(announcement: SourceAnnouncement): Promise<void> {
 		if (this.removingSymbols.has(announcement.symbol)) return;
 		const watched = await this.repository.getSymbol(announcement.symbol);
 		if (!watched) return;
+		const previous = (await this.repository.listLifecycles()).filter(
+			(item) => item.symbol === announcement.symbol,
+		);
 		await this.repository.upsertAnnouncements([
 			{
 				...announcement,
 				companyLogo: announcement.companyLogo ?? watched.companyLogo,
 			},
 		]);
-		await this.repository.replaceLifecycles(
-			announcement.symbol,
+		const lifecycles = await this.validateLifecycles(
 			buildLifecycles(
 				await this.repository.listAnnouncements(announcement.symbol),
+				{ existing: previous },
 			),
 		);
-		await this.repository.setSyncResult(announcement.symbol);
-	}
-
-	private async restartStream(): Promise<void> {
-		if (!this.market) return;
-		if (this.restartingStream) return this.restartingStream;
-		this.restartingStream = this.performRestart().finally(() => {
-			this.restartingStream = undefined;
+		await this.repository.replaceLifecycles(announcement.symbol, lifecycles);
+		const receivedAt = new Date().toISOString();
+		await this.repository.setSyncState(announcement.symbol, {
+			lastSyncedAt: receivedAt,
+			lastAnnouncementAt: maxIso(watched.lastAnnouncementAt, announcement.date),
+			syncStatus: "live",
 		});
-		return this.restartingStream;
+		this.degradedSymbols.delete(announcement.symbol);
+		if (
+			this.degradedSymbols.size === 0 &&
+			this.activeBackfills === 0 &&
+			this.stream?.connected()
+		)
+			this.setStreamState("connected");
+		this.streamDetails.lastEventAt = receivedAt;
+		await this.broadcastLifecycleDiff(previous, lifecycles);
 	}
 
-	private async performRestart(): Promise<void> {
-		await this.stream?.close();
-		this.stream = undefined;
+	private async ensureStream(): Promise<void> {
+		if (!this.market) return;
+		if (this.streamSetup) return this.streamSetup;
+		this.streamSetup = this.configureStream().finally(() => {
+			this.streamSetup = undefined;
+		});
+		return this.streamSetup;
+	}
+
+	private async configureStream(): Promise<void> {
+		const market = this.market;
+		if (!market) return;
 		const symbols = (await this.repository.listSymbols()).map(
 			(item) => item.symbol,
 		);
-		if (symbols.length === 0) return;
-		this.stream = await this.market?.openStream(
+		if (symbols.length === 0) {
+			await this.stream?.close();
+			this.stream = undefined;
+			this.setStreamState("disconnected");
+			return;
+		}
+		this.setStreamState("connecting");
+		if (this.stream) {
+			await this.stream.replaceSymbols(symbols);
+			if (this.stream.connected()) this.setStreamState("connected");
+			return;
+		}
+		this.stream = await market.openStream(
 			symbols,
 			(announcement) => this.ingestAnnouncement(announcement),
-			() => void this.syncAll(),
+			{
+				onConnected: (reconnected) => {
+					this.streamDetails.connectedAt = new Date().toISOString();
+					this.setStreamState(
+						this.activeBackfills > 0 ? "backfilling" : "connected",
+					);
+					if (reconnected) void this.syncAll();
+				},
+				onDisconnected: (reason) => {
+					this.streamDetails.disconnectedAt = new Date().toISOString();
+					this.setStreamState("disconnected", reason);
+				},
+				onError: (error) => this.setStreamState("degraded", error.message),
+			},
+		);
+		if (this.stream.connected()) this.setStreamState("connected");
+	}
+
+	private enqueue<T>(symbol: string, operation: () => Promise<T>): Promise<T> {
+		const previous = this.pipelines.get(symbol) ?? Promise.resolve();
+		const next = previous.catch(() => undefined).then(operation);
+		const tracked = next.finally(() => {
+			if (this.pipelines.get(symbol) === tracked) this.pipelines.delete(symbol);
+		});
+		this.pipelines.set(symbol, tracked);
+		return next;
+	}
+
+	private async validateLifecycles(
+		lifecycles: CorporateActionLifecycle[],
+	): Promise<CorporateActionLifecycle[]> {
+		if (!this.validator) return lifecycles;
+		return Promise.all(
+			lifecycles.map(async (lifecycle) => {
+				try {
+					const aiValidation = await this.validator?.validate(lifecycle);
+					return aiValidation ? { ...lifecycle, aiValidation } : lifecycle;
+				} catch {
+					return lifecycle;
+				}
+			}),
+		);
+	}
+
+	private setStreamState(
+		status: LifecycleStreamDetails["status"],
+		error?: string,
+	): void {
+		this.streamDetails = {
+			...this.streamDetails,
+			status,
+			error,
+		};
+		this.broadcast({
+			type: "stream.status",
+			stream: status,
+			streamDetails: { ...this.streamDetails },
+		});
+	}
+
+	private async broadcastLifecycleDiff(
+		previous: CorporateActionLifecycle[],
+		next: CorporateActionLifecycle[],
+	): Promise<void> {
+		const currentIds = new Set(next.map((item) => item.id));
+		const summary = summarize(await this.repository.listLifecycles());
+		for (const lifecycle of next) {
+			this.broadcast({
+				type: "lifecycle.upsert",
+				data: lifecycle,
+				summary,
+			});
+		}
+		for (const lifecycle of previous) {
+			if (!currentIds.has(lifecycle.id)) {
+				this.broadcast({
+					type: "lifecycle.delete",
+					id: lifecycle.id,
+					symbol: lifecycle.symbol,
+					summary,
+				});
+			}
+		}
+	}
+
+	private async broadcastSnapshot(): Promise<void> {
+		this.broadcast({ type: "snapshot", ...(await this.snapshot()) });
+	}
+
+	private broadcast(message: LifecycleSocketMessage): void {
+		for (const listener of this.listeners) listener(message);
+	}
+
+	private startHeartbeat(): void {
+		if (this.heartbeat) return;
+		this.heartbeat = setInterval(
+			() => this.broadcast({ type: "heartbeat", at: new Date().toISOString() }),
+			HEARTBEAT_INTERVAL_MS,
 		);
 	}
 }
@@ -231,6 +408,19 @@ export function normalizeSymbol(value: string): string {
 		throw new Error("Enter a valid NSE or BSE symbol.");
 	}
 	return symbol;
+}
+
+function recoveryStart(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const timestamp = new Date(value).getTime();
+	return Number.isNaN(timestamp)
+		? undefined
+		: new Date(timestamp - RECOVERY_OVERLAP_MS).toISOString();
+}
+
+function maxIso(left: string | undefined, right: string): string {
+	if (!left) return right;
+	return new Date(left).getTime() >= new Date(right).getTime() ? left : right;
 }
 
 function summarize(data: CorporateActionLifecycle[]): LifecycleSummary {

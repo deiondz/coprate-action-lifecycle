@@ -8,10 +8,9 @@ const env = defineEnv({
 			.default("development"),
 	},
 	server: {
-		API_INTERNAL_URL: z.string().url().default("http://localhost:4000"),
-		PUBLIC_API_URL: z.string().url().default("http://localhost:4000"),
+		API_INTERNAL_URL: z.url().default("http://localhost:4000"),
+		PUBLIC_API_URL: z.url().default("http://localhost:4000"),
 		DATABASE_URL: z
-			.string()
 			.url()
 			.refine(
 				(url) =>
@@ -22,7 +21,6 @@ const env = defineEnv({
 			)
 			.optional(),
 		MONGODB_URI: z
-			.string()
 			.url()
 			.refine(
 				(url) =>
@@ -37,11 +35,12 @@ const env = defineEnv({
 			.positive()
 			.max(100)
 			.default(10),
+		OPENROUTER_API_KEY: z.string().min(1).optional(),
 		BETTER_AUTH_SECRET: z.string().min(32),
-		BETTER_AUTH_URL: z.string().url().optional(),
+		BETTER_AUTH_URL: z.url().optional(),
 		APP_NAME: z.string().min(1).default("Nevin"),
 		ZEPTOMAIL_TOKEN: z.string().min(1).optional(),
-		ZEPTOMAIL_FROM_EMAIL: z.string().email().optional(),
+		ZEPTOMAIL_FROM_EMAIL: z.email().optional(),
 		ZEPTOMAIL_FROM_NAME: z.string().min(1).default("Nevin"),
 		APPLE_CLIENT_ID: z.string().min(1).optional(),
 		APPLE_CLIENT_SECRET: z.string().min(1).optional(),
@@ -65,7 +64,7 @@ const env = defineEnv({
 		GITHUB_CLIENT_SECRET: z.string().min(1).optional(),
 		GITLAB_CLIENT_ID: z.string().min(1).optional(),
 		GITLAB_CLIENT_SECRET: z.string().min(1).optional(),
-		GITLAB_ISSUER: z.string().url().optional(),
+		GITLAB_ISSUER: z.url().optional(),
 		GOOGLE_CLIENT_ID: z.string().min(1).optional(),
 		GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
 		HUGGINGFACE_CLIENT_ID: z.string().min(1).optional(),
@@ -80,7 +79,7 @@ const env = defineEnv({
 		LINEAR_CLIENT_SECRET: z.string().min(1).optional(),
 		LINKEDIN_CLIENT_ID: z.string().min(1).optional(),
 		LINKEDIN_CLIENT_SECRET: z.string().min(1).optional(),
-		MICROSOFT_AUTHORITY: z.string().url().optional(),
+		MICROSOFT_AUTHORITY: z.url().optional(),
 		MICROSOFT_CLIENT_ID: z.string().min(1).optional(),
 		MICROSOFT_CLIENT_SECRET: z.string().min(1).optional(),
 		MICROSOFT_TENANT_ID: z.string().min(1).optional(),
@@ -90,7 +89,7 @@ const env = defineEnv({
 		NOTION_CLIENT_SECRET: z.string().min(1).optional(),
 		PAYBIN_CLIENT_ID: z.string().min(1).optional(),
 		PAYBIN_CLIENT_SECRET: z.string().min(1).optional(),
-		PAYBIN_ISSUER: z.string().url().optional(),
+		PAYBIN_ISSUER: z.url().optional(),
 		PAYPAL_CLIENT_ID: z.string().min(1).optional(),
 		PAYPAL_CLIENT_SECRET: z.string().min(1).optional(),
 		PAYPAL_ENVIRONMENT: z.enum(["sandbox", "live"]).optional(),
@@ -125,7 +124,11 @@ const env = defineEnv({
 		ZOOM_CLIENT_SECRET: z.string().min(1).optional(),
 	},
 	clientPrefix: "NEXT_PUBLIC_",
-	client: {},
+	client: {
+		NEXT_PUBLIC_LIFECYCLE_WS_URL: z
+			.url()
+			.default("ws://localhost:4000/ws/lifecycles"),
+	},
 	env: process.env,
 	skip: process.env.SKIP_ENV_VALIDATION === "true",
 	onError: (issues) => {

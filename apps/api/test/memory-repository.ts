@@ -41,22 +41,31 @@ export class MemoryLifecycleRepository implements LifecycleRepository {
 
 	async removeSymbol(symbol: string): Promise<boolean> {
 		const removed = this.symbols.delete(symbol);
-		for (const [id, row] of this.announcements) {
-			if (row.symbol === symbol) this.announcements.delete(id);
-		}
 		for (const [id, row] of this.lifecycles) {
 			if (row.symbol === symbol) this.lifecycles.delete(id);
 		}
 		return removed;
 	}
 
-	async setSyncResult(symbol: string, error?: string): Promise<void> {
+	async setSyncState(
+		symbol: string,
+		update: Partial<
+			Pick<
+				WatchlistSymbol,
+				| "lastSyncedAt"
+				| "lastAnnouncementAt"
+				| "backfillCompletedAt"
+				| "syncStatus"
+				| "syncError"
+			>
+		>,
+	): Promise<void> {
 		const row = this.symbols.get(symbol);
 		if (!row) return;
 		this.symbols.set(symbol, {
 			...row,
-			lastSyncedAt: new Date().toISOString(),
-			syncError: error,
+			...update,
+			syncError: update.syncError,
 		});
 	}
 

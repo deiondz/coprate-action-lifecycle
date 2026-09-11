@@ -18,6 +18,23 @@ type ResolvedSocialLayout =
 	| "horizontal"
 	| "vertical";
 
+function resolveSocialLayout(
+	socialLayout: SocialLayout,
+	providerCount: number,
+): ResolvedSocialLayout {
+	if (socialLayout === "horizontal") return "horizontal";
+	if (providerCount === 1) return "single";
+	if (socialLayout === "vertical") return "vertical";
+	if (providerCount === 2) return "pair";
+	return "compact";
+}
+
+function providerDisplay(layout: ResolvedSocialLayout) {
+	if (layout === "compact" || layout === "horizontal") return "icon";
+	if (layout === "vertical") return "full";
+	return "name";
+}
+
 /**
  * Render sign-in buttons for configured social providers. Each button owns its own sign-in mutation
  * and reads the shared sign-in pending state from React Query.
@@ -34,16 +51,7 @@ export function ProviderButtons({
 		return null;
 	}
 
-	const resolvedSocialLayout: ResolvedSocialLayout =
-		socialLayout === "horizontal"
-			? "horizontal"
-			: providerCount === 1
-				? "single"
-				: socialLayout === "vertical"
-					? "vertical"
-					: providerCount === 2
-						? "pair"
-						: "compact";
+	const resolvedSocialLayout = resolveSocialLayout(socialLayout, providerCount);
 
 	return (
 		<div
@@ -60,14 +68,7 @@ export function ProviderButtons({
 				<ProviderButton
 					key={provider}
 					provider={provider}
-					display={
-						resolvedSocialLayout === "compact" ||
-						resolvedSocialLayout === "horizontal"
-							? "icon"
-							: resolvedSocialLayout === "vertical"
-								? "full"
-								: "name"
-					}
+					display={providerDisplay(resolvedSocialLayout)}
 					className={cn(
 						"h-10 active:scale-[0.985]",
 						resolvedSocialLayout === "horizontal" && "flex-1",

@@ -15,9 +15,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 
+const RELATIVE_TIME_FORMATTER = new Intl.RelativeTimeFormat(undefined, {
+	numeric: "auto",
+});
+
 function timeAgo(date: Date) {
 	const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-	const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
 	const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
 		["year", 31536000],
@@ -31,11 +34,14 @@ function timeAgo(date: Date) {
 
 	for (const [unit, threshold] of UNITS) {
 		if (seconds >= threshold) {
-			return rtf.format(-Math.floor(seconds / threshold), unit);
+			return RELATIVE_TIME_FORMATTER.format(
+				-Math.floor(seconds / threshold),
+				unit,
+			);
 		}
 	}
 
-	return rtf.format(0, "second");
+	return RELATIVE_TIME_FORMATTER.format(0, "second");
 }
 
 export type ActiveSessionProps = {

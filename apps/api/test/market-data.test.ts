@@ -31,7 +31,7 @@ function marketWithPages(pages: AnnouncementPage[], requestedPages: number[]) {
 }
 
 describe("Drishti announcement backfill", () => {
-	test("fetches backward until the first page containing a corporate action", async () => {
+	test("exhausts every page for a full-retention backfill", async () => {
 		const requestedPages: number[] = [];
 		const market = marketWithPages(
 			[
@@ -75,11 +75,41 @@ describe("Drishti announcement backfill", () => {
 
 		const announcements = await market.listAnnouncements("TCS");
 
-		expect(requestedPages).toEqual([1, 2]);
+		expect(requestedPages).toEqual([1, 2, 3]);
 		expect(announcements.map((item) => item.id)).toEqual([
 			"recent-general",
 			"last-corporate-action",
+			"older-general",
 		]);
+	});
+
+	test("passes bounded recovery timestamps to every paginated request", async () => {
+		const requestedUrls: URL[] = [];
+		const fetchImpl = Object.assign(
+			async (input: RequestInfo | URL) => {
+				requestedUrls.push(new URL(String(input)));
+				return Response.json({ data: [], has_next: false });
+			},
+			{ preconnect: (_url: string | URL) => undefined },
+		);
+		const market = new DrishtiMarketDataSource({
+			apiKey: "test-key",
+			fetchImpl,
+		});
+
+		await market.listAnnouncements("TCS", {
+			from: "2026-09-10T09:50:00.000Z",
+			to: "2026-09-10T10:00:00.000Z",
+		});
+
+		expect(requestedUrls).toHaveLength(1);
+		expect(requestedUrls[0].searchParams.get("from")).toBe(
+			"2026-09-10T09:50:00.000Z",
+		);
+		expect(requestedUrls[0].searchParams.get("to")).toBe(
+			"2026-09-10T10:00:00.000Z",
+		);
+		expect(requestedUrls[0].searchParams.get("detailed")).toBe("true");
 	});
 
 	test("continues to the final page when no corporate action exists", async () => {
@@ -116,5 +146,29 @@ describe("Drishti announcement backfill", () => {
 
 		expect(requestedPages).toEqual([1, 2]);
 		expect(announcements).toHaveLength(2);
+	});
+
+	test("uses the requested symbol when a filtered historical row is blank", async () => {
+		const requestedPages: number[] = [];
+		const market = marketWithPages(
+			[
+				{
+					data: [
+						{
+							id: "blank-symbol",
+							symbol: "",
+							date: "2026-05-01T10:00:00Z",
+							category: "Issue of Securities",
+						},
+					],
+					has_next: false,
+				},
+			],
+			requestedPages,
+		);
+
+		const [announcement] = await market.listAnnouncements("TCS");
+
+		expect(announcement.symbol).toBe("TCS");
 	});
 });

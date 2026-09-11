@@ -4,34 +4,63 @@ import type {
 	ApiError,
 	CorporateActionLifecycle,
 	LifecycleListResponse,
+	LifecycleSocketMessage,
 	WatchlistSymbol,
 } from "@lifecycle/contracts";
 import {
 	ArrowRight,
+	ArrowUpRight,
 	CaretRight,
 	Check,
 	FileText,
+	ListBullets,
 	MagnifyingGlass,
 	Star,
 	Trash,
 } from "@phosphor-icons/react/dist/ssr";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PopButton } from "@/components/pop-button";
 import { Badge } from "@/components/ui/badge";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 const FILTERS = [
 	"All",
 	"Updated today",
 	"Rights issues",
-	"Dividends",
+	"Bonus issues",
 	"Needs review",
 ] as const;
 const EMPTY_LIFECYCLES: CorporateActionLifecycle[] = [];
+const EMPTY_SUMMARY: LifecycleListResponse["summary"] = {
+	active: 0,
+	upcomingDates: 0,
+	updatedToday: 0,
+	completed: 0,
+	needsReview: 0,
+};
+const EMPTY_LIFECYCLE_RESPONSE: LifecycleListResponse = {
+	data: [],
+	summary: EMPTY_SUMMARY,
+	stream: "connecting",
+	streamDetails: { status: "connecting" },
+};
+const INDIA_DATE_FORMATTER = new Intl.DateTimeFormat("en-IN", {
+	day: "numeric",
+	month: "short",
+	year: "numeric",
+	timeZone: "Asia/Kolkata",
+});
 
 function useErrorToast(error: Error | null, id: string): void {
 	useEffect(() => {
@@ -41,6 +70,25 @@ function useErrorToast(error: Error | null, id: string): void {
 		}
 		toast.dismiss(id);
 	}, [error, id]);
+}
+
+function isLifecycleSocketMessage(
+	value: unknown,
+): value is LifecycleSocketMessage {
+	return Boolean(
+		value &&
+			typeof value === "object" &&
+			"type" in value &&
+			typeof value.type === "string",
+	);
+}
+
+function sortLifecycles(
+	data: CorporateActionLifecycle[],
+): CorporateActionLifecycle[] {
+	return [...data].sort((left, right) =>
+		right.updatedAt.localeCompare(left.updatedAt),
+	);
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -57,12 +105,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 function formatDate(value: string): string {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
-	return new Intl.DateTimeFormat("en-IN", {
-		day: "numeric",
-		month: "short",
-		year: "numeric",
-		timeZone: "Asia/Kolkata",
-	}).format(date);
+	return INDIA_DATE_FORMATTER.format(date);
 }
 
 function relativeTime(value: string): string {
@@ -76,54 +119,6 @@ function relativeTime(value: string): string {
 	return formatDate(value);
 }
 
-function humanizeKey(value: string): string {
-	return value
-		.replaceAll("_", " ")
-		.replaceAll(".", " · ")
-		.replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function flattenEventData(
-	value: unknown,
-	path: string[] = [],
-): Array<{ key: string; label: string; value: string }> {
-	if (value == null || value === "") return [];
-	if (Array.isArray(value)) {
-		if (value.every((item) => item == null || typeof item !== "object")) {
-			return [
-				{
-					key: path.join("."),
-					label: humanizeKey(path.join(".")),
-					value: value.filter((item) => item != null).join(", "),
-				},
-			];
-		}
-		return value.flatMap((item, index) =>
-			flattenEventData(item, [...path, String(index + 1)]),
-		);
-	}
-	if (typeof value === "object") {
-		return Object.entries(value).flatMap(([key, nested]) =>
-			flattenEventData(nested, [...path, key]),
-		);
-	}
-	return [
-		{
-			key: path.join("."),
-			label: humanizeKey(path.join(".")),
-			value: typeof value === "boolean" ? (value ? "Yes" : "No") : String(value),
-		},
-	];
-}
-
-function formatRawData(value: unknown): string {
-	try {
-		return JSON.stringify(value, null, 2) ?? String(value);
-	} catch {
-		return String(value);
-	}
-}
-
 function CompanyLogo({
 	logo,
 	name,
@@ -135,14 +130,14 @@ function CompanyLogo({
 	symbol: string;
 	compact?: boolean;
 }) {
-	const [failed, setFailed] = useState(false);
-	useEffect(() => setFailed(false), [logo]);
-	const size = compact ? "size-9 rounded-lg" : "size-12 rounded-[12px]";
+	const [failedLogo, setFailedLogo] = useState<string>();
+	const failed = failedLogo === logo;
+	const size = compact ? "size-9 rounded-full" : "size-12 rounded-2xl";
 
 	return (
 		<div
 			className={cn(
-				"grid shrink-0 place-items-center overflow-hidden border border-hairline bg-sub font-medium text-ink-2",
+				"grid shrink-0 place-items-center overflow-hidden border border-hairline bg-panel font-medium text-ink-2 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.65)]",
 				size,
 				compact ? "text-[10px]" : "text-[12px]",
 			)}
@@ -152,13 +147,19 @@ function CompanyLogo({
 				<img
 					src={logo}
 					alt={`${name} logo`}
-					className="size-full object-contain p-1.5"
+					className="size-full object-contain p-1"
 					loading="lazy"
 					referrerPolicy="no-referrer"
-					onError={() => setFailed(true)}
+					onError={() => setFailedLogo(logo)}
 				/>
 			) : (
-				<span aria-label={`${name} logo fallback`}>{symbol.slice(0, 3)}</span>
+				<span
+					className="font-semibold tracking-[-0.06em]"
+					role="img"
+					aria-label={`${name} logo fallback`}
+				>
+					{symbol.slice(0, 3)}
+				</span>
 			)}
 		</div>
 	);
@@ -181,6 +182,121 @@ function StateBadge({ lifecycle }: { lifecycle: CorporateActionLifecycle }) {
 			<span className="size-1.5 rounded-full bg-current" />
 			{lifecycle.status}
 		</span>
+	);
+}
+
+function AiValidationBadge({
+	lifecycle,
+}: {
+	lifecycle: CorporateActionLifecycle;
+}) {
+	const validation = lifecycle.aiValidation;
+	if (!validation) return null;
+	const needsReview = validation.status === "needs_review";
+	return (
+		<span
+			className={cn(
+				"inline-flex items-center gap-1.5 text-[10px] font-medium",
+				needsReview ? "text-flag" : "text-moss",
+			)}
+			title={validation.rationale}
+		>
+			<span className="size-1.5 rounded-full bg-current" />
+			{needsReview ? "AI review suggested" : "AI verified"}
+		</span>
+	);
+}
+
+function StageEvidenceTooltip({
+	lifecycle,
+	stage,
+	index,
+	compact,
+}: {
+	lifecycle: CorporateActionLifecycle;
+	stage: CorporateActionLifecycle["stages"][number];
+	index: number;
+	compact: boolean;
+}) {
+	const evidence = stage.evidence;
+	const marker = (
+		<span
+			className={cn(
+				"grid size-5 shrink-0 place-items-center rounded-full border text-[10px]",
+				stage.status === "completed" && "border-moss bg-moss text-white",
+				stage.status === "current" &&
+					"border-interior-accent bg-interior-accent text-white ring-4 ring-accent-soft",
+				stage.status === "pending" &&
+					"border-hairline-strong bg-panel text-ink-3",
+				stage.status === "skipped" &&
+					"border-dashed border-hairline-strong bg-panel text-ink-3",
+				stage.status === "cancelled" && "border-flag bg-flag/10 text-flag",
+			)}
+		>
+			{stage.status === "completed" ? (
+				<Check aria-hidden />
+			) : stage.status === "skipped" ? (
+				<>
+					<span aria-hidden>—</span>
+					<span className="sr-only">Skipped</span>
+				</>
+			) : (
+				index + 1
+			)}
+		</span>
+	);
+	return (
+		<Tooltip>
+			<TooltipTrigger
+				render={
+					compact ? (
+						marker
+					) : (
+						<button
+							type="button"
+							aria-label={`${lifecycle.actionType}: ${stage.label} evidence`}
+							className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/40"
+						>
+							{marker}
+						</button>
+					)
+				}
+			/>
+			<TooltipPopup
+				className="w-[min(18rem,calc(100vw-2rem))] border-hairline-strong bg-panel p-0 text-left shadow-[0_12px_32px_rgba(28,25,23,0.18)]"
+				side="top"
+			>
+				<div className="border-b border-hairline px-3.5 py-2.5">
+					<p className="meta text-ink-3">Source filing</p>
+					<p className="mt-1 text-[11px] font-medium text-ink">{stage.label}</p>
+				</div>
+				{evidence ? (
+					<div className="space-y-3 px-3.5 py-3 text-[11px] leading-[1.45] text-ink-2">
+						<p className="break-words text-ink">{evidence.summary}</p>
+						<div className="flex items-center justify-between gap-3 border-t border-hairline pt-2.5 text-[10px]">
+							<span className="text-ink-3">Filed</span>
+							<time
+								className="shrink-0 font-medium text-ink"
+								dateTime={evidence.date}
+							>
+								{formatDate(evidence.date)}
+							</time>
+						</div>
+						<div>
+							<p className="meta text-ink-3">What changed</p>
+							<p className="mt-1 break-words text-[10.5px] text-ink-2">
+								{evidence.criticalAspect}
+							</p>
+						</div>
+					</div>
+				) : (
+					<div className="px-3.5 py-3 text-[10.5px] leading-4 text-ink-2">
+						<p className="font-medium text-ink">Awaiting evidence</p>
+						<p className="mt-1">No filing has confirmed this step yet.</p>
+					</div>
+				)}
+			</TooltipPopup>
+		</Tooltip>
 	);
 }
 
@@ -211,32 +327,12 @@ function ProgressRail({
 						className={cn("flex flex-col", compact ? "w-[112px]" : "w-[132px]")}
 					>
 						<div className="flex items-center">
-							<span
-								className={cn(
-									"grid size-5 shrink-0 place-items-center rounded-full border text-[10px]",
-									stage.status === "completed" &&
-										"border-moss bg-moss text-white",
-									stage.status === "current" &&
-										"border-interior-accent bg-interior-accent text-white ring-4 ring-accent-soft",
-									stage.status === "pending" &&
-										"border-hairline-strong bg-panel text-ink-3",
-									stage.status === "skipped" &&
-										"border-dashed border-hairline-strong bg-panel text-ink-3",
-									stage.status === "cancelled" &&
-										"border-flag bg-flag/10 text-flag",
-								)}
-							>
-								{stage.status === "completed" ? (
-									<Check aria-hidden />
-								) : stage.status === "skipped" ? (
-									<>
-										<span aria-hidden>—</span>
-										<span className="sr-only">Skipped</span>
-									</>
-								) : (
-									index + 1
-								)}
-							</span>
+							<StageEvidenceTooltip
+								compact={compact}
+								index={index}
+								lifecycle={lifecycle}
+								stage={stage}
+							/>
 							{index < lifecycle.stages.length - 1 ? (
 								<span
 									className={cn(
@@ -319,6 +415,9 @@ function LifecycleRow({
 			</div>
 			<div className="min-w-0 overflow-hidden">
 				<StateBadge lifecycle={lifecycle} />
+				<div className="mt-1.5">
+					<AiValidationBadge lifecycle={lifecycle} />
+				</div>
 				<div className="mt-3 overflow-hidden">
 					<ProgressRail lifecycle={lifecycle} compact />
 				</div>
@@ -364,6 +463,7 @@ function DetailPanel({ lifecycle }: { lifecycle: CorporateActionLifecycle }) {
 						</h2>
 						<div className="mt-2 flex items-center gap-3">
 							<StateBadge lifecycle={lifecycle} />
+							<AiValidationBadge lifecycle={lifecycle} />
 							<span className="text-[11px] text-ink-3">
 								Updated {relativeTime(lifecycle.updatedAt)}
 							</span>
@@ -413,6 +513,21 @@ function DetailPanel({ lifecycle }: { lifecycle: CorporateActionLifecycle }) {
 					</dl>
 				</div>
 				<aside className="p-5 sm:p-6">
+					{lifecycle.aiValidation ? (
+						<section className="mb-6 rounded-[10px] border border-hairline bg-sub p-3.5">
+							<AiValidationBadge lifecycle={lifecycle} />
+							<p className="mt-2 text-[11px] leading-4 text-ink-2">
+								{lifecycle.aiValidation.rationale}
+							</p>
+							{lifecycle.aiValidation.suggestions.length > 0 ? (
+								<ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-4 text-ink-2">
+									{lifecycle.aiValidation.suggestions.map((suggestion) => (
+										<li key={suggestion}>{suggestion}</li>
+									))}
+								</ul>
+							) : null}
+						</section>
+					) : null}
 					<h3 className="text-[13px] font-medium text-ink">
 						Meaningful changes
 					</h3>
@@ -452,37 +567,314 @@ function DetailPanel({ lifecycle }: { lifecycle: CorporateActionLifecycle }) {
 				</aside>
 			</div>
 
-			<footer className="border-t border-hairline px-5 py-4 sm:px-6">
-				<div className="flex items-center justify-between">
+			<footer className="border-t border-hairline px-5 py-5 sm:px-6">
+				<div className="flex flex-wrap items-center justify-between gap-3">
 					<div className="flex items-center gap-2">
-						<FileText aria-hidden className="size-4 text-ink-3" />
-						<h3 className="text-[12px] font-medium text-ink">Source filings</h3>
+						<div className="grid size-7 place-items-center rounded-md bg-sub text-ink-3">
+							<FileText aria-hidden className="size-3.5" />
+						</div>
+						<div>
+							<h3 className="text-[12px] font-medium text-ink">
+								Source filings
+							</h3>
+							<p className="mt-0.5 text-[10.5px] text-ink-3">
+								{lifecycle.announcements.length} filing
+								{lifecycle.announcements.length === 1 ? "" : "s"} · newest first
+							</p>
+						</div>
 					</div>
 					<span className="text-[10.5px] text-ink-3">
-						Every displayed fact retains a filing reference
+						Open a filing to review its source record
 					</span>
 				</div>
-				<div className="mt-3 grid gap-2 lg:grid-cols-3">
+				<div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
 					{lifecycle.announcements.map((item) => (
 						<a
 							key={item.id}
 							href={item.sourceUrl}
 							target="_blank"
 							rel="noreferrer"
-							className="rounded-lg border border-hairline bg-sub p-3"
+							aria-label={`Open filing: ${item.headline}`}
+							className="group min-w-0 rounded-[10px] border border-hairline bg-sub p-3.5 transition-[background-color,border-color,box-shadow] hover:border-hairline-strong hover:bg-panel hover:shadow-[0_3px_12px_rgba(28,25,23,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/35"
 						>
-							<div className="flex items-center justify-between">
-								<span className="meta text-ink-3">{formatDate(item.date)}</span>
-								<Badge variant="outline">{item.exchange}</Badge>
+							<div className="flex items-center justify-between gap-2">
+								<time className="meta text-ink-3" dateTime={item.date}>
+									{formatDate(item.date)}
+								</time>
+								<div className="flex items-center gap-1">
+									{item.exchange.split("/").map((exchange) => (
+										<Badge key={exchange} size="sm" variant="outline">
+											{exchange.trim()}
+										</Badge>
+									))}
+								</div>
 							</div>
-							<p className="mt-2 text-[11.5px] font-medium leading-4 text-ink">
-								{item.headline}
-							</p>
-							<p className="meta mt-2 text-ink-3">{item.id}</p>
+							<div className="mt-3 flex items-start justify-between gap-3">
+								<p className="line-clamp-2 min-w-0 text-[12px] font-medium leading-[1.4] text-ink">
+									{item.headline}
+								</p>
+								<ArrowUpRight
+									aria-hidden
+									className="mt-0.5 size-3.5 shrink-0 text-ink-3 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+								/>
+							</div>
+							{item.summary && item.summary !== item.headline ? (
+								<p className="mt-2 line-clamp-2 text-[10.5px] leading-4 text-ink-2">
+									{item.summary}
+								</p>
+							) : null}
+							<div className="mt-3 flex min-w-0 items-center justify-between gap-2 border-t border-hairline pt-2.5">
+								<span className="truncate text-[10px] text-ink-3">
+									{item.descriptor ?? item.category}
+								</span>
+								{item.important ? (
+									<span className="shrink-0 text-[9.5px] font-medium uppercase tracking-wide text-flag">
+										Material
+									</span>
+								) : null}
+							</div>
 						</a>
 					))}
 				</div>
 			</footer>
+		</section>
+	);
+}
+
+function DashboardHeader({
+	addPending,
+	fullMarketTracking,
+	onAdd,
+	onFullMarketTrackingChange,
+	onRemove,
+	onSymbolInputChange,
+	symbolInput,
+	symbols,
+}: {
+	addPending: boolean;
+	fullMarketTracking: boolean;
+	onAdd: (event: FormEvent<HTMLFormElement>) => void;
+	onFullMarketTrackingChange: (enabled: boolean) => void;
+	onRemove: (symbol: string) => void;
+	onSymbolInputChange: (value: string) => void;
+	symbolInput: string;
+	symbols: WatchlistSymbol[];
+}) {
+	return (
+		<section className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+			<div>
+				<h1 className="text-[clamp(26px,3vw,34px)] font-medium leading-[1.05] tracking-[-0.04em] text-ink">
+					Corporate actions
+				</h1>
+				<p className="mt-2.5 text-[13px] text-ink-3">
+					Track dates, changes, and source filings.
+				</p>
+				<div className="mt-5 flex w-fit items-center gap-3 rounded-[10px] border border-hairline bg-panel px-3 py-2.5">
+					<Switch
+						checked={fullMarketTracking}
+						onCheckedChange={onFullMarketTrackingChange}
+						aria-labelledby="full-market-tracking-label"
+						className="[--thumb-size:--spacing(4)] data-checked:bg-moss data-unchecked:bg-hairline-strong"
+					/>
+					<span>
+						<span
+							id="full-market-tracking-label"
+							className="block text-[11.5px] font-medium text-ink"
+						>
+							Full market tracking
+						</span>
+						<span className="mt-0.5 block text-[10.5px] text-ink-3">
+							{fullMarketTracking
+								? "Enabled — ready for market-wide coverage"
+								: "Track only the symbols you add"}
+						</span>
+					</span>
+				</div>
+			</div>
+			<form
+				onSubmit={onAdd}
+				className="flex w-full items-center gap-2 lg:w-[360px]"
+			>
+				<Input
+					id="symbol"
+					value={symbolInput}
+					onChange={(event) =>
+						onSymbolInputChange(event.target.value.toUpperCase())
+					}
+					placeholder="Company symbol"
+					autoComplete="off"
+					disabled={addPending}
+					className="min-w-0 flex-1"
+				/>
+				<PopButton
+					type="submit"
+					color="neutral"
+					disabled={addPending || !symbolInput.trim()}
+					className="min-w-[72px]"
+				>
+					{addPending ? "Adding…" : "Add"}
+				</PopButton>
+				{symbols.length > 0 ? (
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<button
+								type="button"
+								className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-hairline bg-panel px-2.5 text-[10.5px] font-medium text-ink-2 shadow-[inset_0_1px_0_rgb(255_255_255_/_0.7)] transition-colors hover:bg-sub focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25"
+								aria-label={`Open watched symbols (${symbols.length})`}
+							>
+								<ListBullets aria-hidden className="size-3.5 text-ink-3" />
+								<span>{symbols.length}</span>
+							</button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent
+							align="end"
+							className="w-64 border border-hairline bg-panel p-1.5 shadow-lg"
+						>
+							<div className="flex items-center justify-between px-2 py-1.5">
+								<p className="meta uppercase text-ink-3">Watched symbols</p>
+								<span className="text-[10px] text-ink-3">{symbols.length}</span>
+							</div>
+							<div className="max-h-64 overflow-y-auto">
+								{symbols.map((item) => (
+									<div
+										key={item.symbol}
+										className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-sub"
+									>
+										<CompanyLogo
+											logo={item.companyLogo}
+											name={item.companyName}
+											symbol={item.symbol}
+											compact
+										/>
+										<div className="min-w-0 flex-1">
+											<p className="text-[11px] font-medium text-ink">
+												{item.symbol}
+											</p>
+											<p className="truncate text-[10px] text-ink-3">
+												{item.companyName}
+											</p>
+										</div>
+										<button
+											type="button"
+											onClick={() => onRemove(item.symbol)}
+											aria-label={`Remove ${item.symbol}`}
+											className="grid size-7 place-items-center rounded-md text-ink-3 transition-colors hover:bg-flag/10 hover:text-flag focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25"
+										>
+											<Trash aria-hidden className="size-3.5" />
+										</button>
+									</div>
+								))}
+							</div>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				) : null}
+			</form>
+		</section>
+	);
+}
+
+function FilterControls({
+	filter,
+	onFilterChange,
+	onQueryChange,
+	query,
+}: {
+	filter: (typeof FILTERS)[number];
+	onFilterChange: (filter: (typeof FILTERS)[number]) => void;
+	onQueryChange: (query: string) => void;
+	query: string;
+}) {
+	return (
+		<div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<nav
+				className="flex gap-1 overflow-x-auto rounded-[10px] bg-well p-1"
+				aria-label="Quick filters"
+			>
+				{FILTERS.map((item) => (
+					<button
+						key={item}
+						type="button"
+						onClick={() => onFilterChange(item)}
+						aria-pressed={filter === item}
+						className={cn(
+							"shrink-0 rounded-[7px] px-3 py-1.5 text-[11.5px] font-medium transition-[background-color,color,box-shadow] duration-150",
+							filter === item
+								? "bg-panel text-ink shadow-[0_1px_2px_rgba(28,25,23,0.10)]"
+								: "text-ink-3 hover:text-ink",
+						)}
+					>
+						{item}
+					</button>
+				))}
+			</nav>
+			<div className="relative w-full sm:w-72">
+				<MagnifyingGlass
+					aria-hidden
+					className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-3"
+				/>
+				<Input
+					value={query}
+					onChange={(event) => onQueryChange(event.target.value)}
+					placeholder="Filter current lifecycles"
+					aria-label="Filter current lifecycles"
+					className="pl-9"
+				/>
+			</div>
+		</div>
+	);
+}
+
+function LifecycleActivity({
+	isLoading,
+	lifecycles,
+	onSelect,
+	selected,
+	visible,
+}: {
+	isLoading: boolean;
+	lifecycles: CorporateActionLifecycle[];
+	onSelect: (id: string) => void;
+	selected: CorporateActionLifecycle;
+	visible: CorporateActionLifecycle[];
+}) {
+	let content: ReactNode = (
+		<div className="border-t border-hairline px-5 py-12 text-center text-[12px] text-ink-3">
+			{lifecycles.length === 0
+				? "Add a symbol above to reconstruct its corporate-action lifecycles."
+				: "No lifecycles match this view."}
+		</div>
+	);
+	if (isLoading) {
+		content = (
+			<div className="border-t border-hairline px-5 py-12 text-center text-[12px] text-ink-3">
+				Loading lifecycles…
+			</div>
+		);
+	} else if (visible.length > 0) {
+		content = visible.map((lifecycle) => (
+			<LifecycleRow
+				key={lifecycle.id}
+				lifecycle={lifecycle}
+				selected={selected.id === lifecycle.id}
+				onSelect={() => onSelect(lifecycle.id)}
+			/>
+		));
+	}
+
+	return (
+		<section className="mt-4 overflow-hidden rounded-[12px] border border-hairline bg-panel">
+			<div className="flex items-center justify-between px-5 py-4">
+				<div>
+					<h2 className="text-[13px] font-medium text-ink">
+						Lifecycle activity
+					</h2>
+					<p className="mt-1 text-[11px] text-ink-3">
+						Announcements are grouped by the corporate action they update.
+					</p>
+				</div>
+				<span className="meta text-ink-3">{visible.length} RESULTS</span>
+			</div>
+			{content}
 		</section>
 	);
 }
@@ -493,17 +885,145 @@ export function CorporateActionDashboard() {
 	const [query, setQuery] = useState("");
 	const [symbolInput, setSymbolInput] = useState("");
 	const [selectedId, setSelectedId] = useState<string>();
+	const [socketReady, setSocketReady] = useState(false);
+	const [fullMarketTracking, setFullMarketTracking] = useState(false);
+	useEffect(() => {
+		setFullMarketTracking(
+			window.localStorage.getItem("full-market-tracking") === "enabled",
+		);
+	}, []);
+	function setFullMarketTrackingPreference(enabled: boolean): void {
+		setFullMarketTracking(enabled);
+		window.localStorage.setItem(
+			"full-market-tracking",
+			enabled ? "enabled" : "disabled",
+		);
+		toast.message(
+			enabled
+				? "Full market tracking enabled"
+				: "Tracking your watched symbols only",
+		);
+	}
 	const lifecycleQuery = useQuery({
 		queryKey: ["lifecycles"],
 		queryFn: () =>
 			requestJson<LifecycleListResponse>("/backend/api/lifecycles"),
-		refetchInterval: 20_000,
+		enabled: false,
 	});
 	const symbolsQuery = useQuery({
 		queryKey: ["symbols"],
 		queryFn: () =>
 			requestJson<{ data: WatchlistSymbol[] }>("/backend/api/symbols"),
+		enabled: false,
 	});
+	useEffect(() => {
+		let socket: WebSocket | undefined;
+		let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+		let stopped = false;
+		let attempts = 0;
+		const socketUrl =
+			process.env.NEXT_PUBLIC_LIFECYCLE_WS_URL ??
+			"ws://localhost:4000/ws/lifecycles";
+
+		function updateStream(stream: LifecycleListResponse["stream"]): void {
+			queryClient.setQueryData<LifecycleListResponse>(
+				["lifecycles"],
+				(current) => ({
+					...(current ?? EMPTY_LIFECYCLE_RESPONSE),
+					stream,
+					streamDetails: {
+						...(current?.streamDetails ?? { status: stream }),
+						status: stream,
+					},
+				}),
+			);
+		}
+
+		function connect(): void {
+			if (stopped) return;
+			updateStream("connecting");
+			socket = new WebSocket(socketUrl);
+			socket.onopen = () => {
+				attempts = 0;
+			};
+			socket.onmessage = (event) => {
+				let message: unknown;
+				try {
+					message = JSON.parse(String(event.data));
+				} catch {
+					return;
+				}
+				if (!isLifecycleSocketMessage(message)) return;
+				if (message.type === "snapshot") {
+					queryClient.setQueryData<LifecycleListResponse>(["lifecycles"], {
+						data: message.data,
+						summary: message.summary,
+						stream: message.stream,
+						streamDetails: message.streamDetails,
+					});
+					queryClient.setQueryData<{ data: WatchlistSymbol[] }>(["symbols"], {
+						data: message.symbols,
+					});
+					setSocketReady(true);
+					return;
+				}
+				if (message.type === "lifecycle.upsert") {
+					queryClient.setQueryData<LifecycleListResponse>(
+						["lifecycles"],
+						(current) => ({
+							...(current ?? EMPTY_LIFECYCLE_RESPONSE),
+							data: sortLifecycles([
+								...(current?.data ?? []).filter(
+									(item) => item.id !== message.data.id,
+								),
+								message.data,
+							]),
+							summary: message.summary,
+						}),
+					);
+					return;
+				}
+				if (message.type === "lifecycle.delete") {
+					queryClient.setQueryData<LifecycleListResponse>(
+						["lifecycles"],
+						(current) => ({
+							...(current ?? EMPTY_LIFECYCLE_RESPONSE),
+							data: (current?.data ?? []).filter(
+								(item) => item.id !== message.id,
+							),
+							summary: message.summary,
+						}),
+					);
+					return;
+				}
+				if (message.type === "stream.status") {
+					queryClient.setQueryData<LifecycleListResponse>(
+						["lifecycles"],
+						(current) => ({
+							...(current ?? EMPTY_LIFECYCLE_RESPONSE),
+							stream: message.stream,
+							streamDetails: message.streamDetails,
+						}),
+					);
+				}
+			};
+			socket.onerror = () => socket?.close();
+			socket.onclose = () => {
+				if (stopped) return;
+				updateStream("disconnected");
+				attempts += 1;
+				const delay = Math.min(30_000, 1_000 * 2 ** (attempts - 1));
+				reconnectTimer = setTimeout(connect, delay);
+			};
+		}
+
+		connect();
+		return () => {
+			stopped = true;
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			socket?.close();
+		};
+	}, [queryClient]);
 	useErrorToast(lifecycleQuery.error, "lifecycle-query-error");
 	useErrorToast(symbolsQuery.error, "symbols-query-error");
 	const addSymbol = useMutation({
@@ -513,12 +1033,19 @@ export function CorporateActionDashboard() {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ symbol }),
 			}),
-		onSuccess: async () => {
+		onSuccess: (response) => {
 			setSymbolInput("");
-			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: ["symbols"] }),
-				queryClient.invalidateQueries({ queryKey: ["lifecycles"] }),
-			]);
+			queryClient.setQueryData<{ data: WatchlistSymbol[] }>(
+				["symbols"],
+				(current) => ({
+					data: [
+						...(current?.data ?? []).filter(
+							(item) => item.symbol !== response.data.symbol,
+						),
+						response.data,
+					].sort((left, right) => left.symbol.localeCompare(right.symbol)),
+				}),
+			);
 		},
 		onError: (error) => toast.error(error.message),
 	});
@@ -530,12 +1057,21 @@ export function CorporateActionDashboard() {
 			);
 			if (!response.ok) throw new Error("Unable to remove symbol.");
 		},
-		onSuccess: async () => {
+		onSuccess: (_response, symbol) => {
 			setSelectedId(undefined);
-			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: ["symbols"] }),
-				queryClient.invalidateQueries({ queryKey: ["lifecycles"] }),
-			]);
+			queryClient.setQueryData<{ data: WatchlistSymbol[] }>(
+				["symbols"],
+				(current) => ({
+					data: (current?.data ?? []).filter((item) => item.symbol !== symbol),
+				}),
+			);
+			queryClient.setQueryData<LifecycleListResponse>(
+				["lifecycles"],
+				(current) => ({
+					...(current ?? EMPTY_LIFECYCLE_RESPONSE),
+					data: (current?.data ?? []).filter((item) => item.symbol !== symbol),
+				}),
+			);
 		},
 		onError: (error) => toast.error(error.message),
 	});
@@ -553,7 +1089,7 @@ export function CorporateActionDashboard() {
 						item.updatedAt.slice(0, 10) ===
 							new Date().toISOString().slice(0, 10)) ||
 					(filter === "Rights issues" && item.actionType === "Rights Issue") ||
-					(filter === "Dividends" && item.actionType === "Dividend") ||
+					(filter === "Bonus issues" && item.actionType === "Bonus Issue") ||
 					(filter === "Needs review" && item.state === "needs_review");
 				return matchesQuery && matchesFilter;
 			}),
@@ -561,13 +1097,6 @@ export function CorporateActionDashboard() {
 	);
 	const selected =
 		lifecycles.find((item) => item.id === selectedId) ?? lifecycles[0];
-	const summary = lifecycleQuery.data?.summary ?? {
-		active: 0,
-		upcomingDates: 0,
-		updatedToday: 0,
-		completed: 0,
-		needsReview: 0,
-	};
 	const stream = lifecycleQuery.data?.stream ?? "disconnected";
 	useEffect(() => {
 		const toastId = "drishti-key-required";
@@ -577,24 +1106,6 @@ export function CorporateActionDashboard() {
 		}
 		toast.dismiss(toastId);
 	}, [stream]);
-	const streamLabel =
-		stream === "connected"
-			? "Drishti feed · live"
-			: "Drishti feed · reconnecting";
-	const metrics = [
-		{ label: "Active", value: summary.active },
-		{
-			label: "Upcoming",
-			value: summary.upcomingDates,
-		},
-		{ label: "Updated today", value: summary.updatedToday },
-		{
-			label: "Completed",
-			value: summary.completed,
-		},
-		{ label: "Needs review", value: summary.needsReview },
-	];
-
 	function submitSymbol(event: FormEvent<HTMLFormElement>): void {
 		event.preventDefault();
 		const value = symbolInput.trim();
@@ -603,159 +1114,29 @@ export function CorporateActionDashboard() {
 
 	return (
 		<main className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col px-5 py-10 sm:px-8 sm:py-14">
-			<section className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-				<div>
-					{stream !== "not_configured" ? (
-						<div className="mb-3 flex items-center gap-2">
-							<span
-								className={cn(
-									"size-1.5 rounded-full",
-									stream === "connected" ? "bg-moss" : "bg-flag",
-								)}
-							/>
-							<span className="meta uppercase text-ink-3">{streamLabel}</span>
-						</div>
-					) : null}
-					<h1 className="text-[clamp(26px,3vw,34px)] font-medium leading-[1.05] tracking-[-0.04em] text-ink">
-						Corporate actions
-					</h1>
-					<p className="mt-2.5 text-[13px] text-ink-3">
-						Track dates, changes, and source filings.
-					</p>
-				</div>
-				<form onSubmit={submitSymbol} className="w-full lg:w-[360px]">
-					<div className="flex items-start gap-2">
-						<Input
-							id="symbol"
-							value={symbolInput}
-							onChange={(event) =>
-								setSymbolInput(event.target.value.toUpperCase())
-							}
-							placeholder="Company symbol"
-							autoComplete="off"
-							disabled={addSymbol.isPending}
-						/>
-						<PopButton
-							type="submit"
-							color="neutral"
-							disabled={addSymbol.isPending || !symbolInput.trim()}
-							className="min-w-[72px]"
-						>
-							{addSymbol.isPending ? "Adding…" : "Add"}
-						</PopButton>
-					</div>
-					{symbolsQuery.data?.data.length ? (
-						<div className="mt-2 flex flex-wrap gap-1.5">
-							{symbolsQuery.data.data.map((item) => (
-								<span
-									key={item.symbol}
-									className="inline-flex items-center gap-1 rounded-full border border-hairline bg-panel pl-2.5 text-[10.5px] text-ink-2"
-								>
-									{item.symbol}
-									<button
-										type="button"
-										onClick={() => removeSymbol.mutate(item.symbol)}
-										aria-label={`Remove ${item.symbol}`}
-										className="grid size-7 place-items-center text-ink-3 hover:text-flag"
-									>
-										<Trash aria-hidden className="size-3" />
-									</button>
-								</span>
-							))}
-						</div>
-					) : null}
-				</form>
-			</section>
-
-			<section
-				aria-label="Lifecycle summary"
-				className="mt-10 grid border-y border-hairline sm:grid-cols-5 sm:divide-x sm:divide-hairline"
-			>
-				{metrics.map(({ label, value }) => (
-					<div
-						key={label}
-						className="flex items-baseline justify-between border-b border-hairline px-3 py-3.5 last:border-b-0 sm:block sm:border-b-0 sm:px-5"
-					>
-						<div className="contents sm:block">
-							<p className="text-[11.5px] text-ink-3">{label}</p>
-							<p className="text-lg font-medium tracking-tight text-ink tnum sm:mt-2">
-								{String(value)}
-							</p>
-						</div>
-					</div>
-				))}
-			</section>
-
-			<div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-				<nav
-					className="flex gap-1 overflow-x-auto rounded-[10px] bg-well p-1"
-					aria-label="Quick filters"
-				>
-					{FILTERS.map((item) => (
-						<button
-							key={item}
-							type="button"
-							onClick={() => setFilter(item)}
-							aria-pressed={filter === item}
-							className={cn(
-								"shrink-0 rounded-[7px] px-3 py-1.5 text-[11.5px] font-medium transition-[background-color,color,box-shadow] duration-150",
-								filter === item
-									? "bg-panel text-ink shadow-[0_1px_2px_rgba(28,25,23,0.10)]"
-									: "text-ink-3 hover:text-ink",
-							)}
-						>
-							{item}
-						</button>
-					))}
-				</nav>
-				<div className="relative w-full sm:w-72">
-					<MagnifyingGlass
-						aria-hidden
-						className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-3"
-					/>
-					<Input
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-						placeholder="Filter current lifecycles"
-						aria-label="Filter current lifecycles"
-						className="pl-9"
-					/>
-				</div>
-			</div>
-
-			<section className="mt-4 overflow-hidden rounded-[12px] border border-hairline bg-panel">
-				<div className="flex items-center justify-between px-5 py-4">
-					<div>
-						<h2 className="text-[13px] font-medium text-ink">
-							Lifecycle activity
-						</h2>
-						<p className="mt-1 text-[11px] text-ink-3">
-							Announcements are grouped by the corporate action they update.
-						</p>
-					</div>
-					<span className="meta text-ink-3">{visible.length} RESULTS</span>
-				</div>
-				{lifecycleQuery.isLoading ? (
-					<div className="border-t border-hairline px-5 py-12 text-center text-[12px] text-ink-3">
-						Loading lifecycles…
-					</div>
-				) : visible.length ? (
-					visible.map((lifecycle) => (
-						<LifecycleRow
-							key={lifecycle.id}
-							lifecycle={lifecycle}
-							selected={selected.id === lifecycle.id}
-							onSelect={() => setSelectedId(lifecycle.id)}
-						/>
-					))
-				) : (
-					<div className="border-t border-hairline px-5 py-12 text-center text-[12px] text-ink-3">
-						{lifecycles.length === 0
-							? "Add a symbol above to reconstruct its corporate-action lifecycles."
-							: "No lifecycles match this view."}
-					</div>
-				)}
-			</section>
+			<DashboardHeader
+				addPending={addSymbol.isPending}
+				fullMarketTracking={fullMarketTracking}
+				onAdd={submitSymbol}
+				onFullMarketTrackingChange={setFullMarketTrackingPreference}
+				onRemove={removeSymbol.mutate}
+				onSymbolInputChange={setSymbolInput}
+				symbolInput={symbolInput}
+				symbols={symbolsQuery.data?.data ?? []}
+			/>
+			<FilterControls
+				filter={filter}
+				onFilterChange={setFilter}
+				onQueryChange={setQuery}
+				query={query}
+			/>
+			<LifecycleActivity
+				isLoading={!socketReady && !lifecycleQuery.data}
+				lifecycles={lifecycles}
+				onSelect={setSelectedId}
+				selected={selected}
+				visible={visible}
+			/>
 
 			{selected ? (
 				<div className="mt-5">

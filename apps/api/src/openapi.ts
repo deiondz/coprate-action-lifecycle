@@ -13,7 +13,7 @@ export const openApiDocument = {
 		title: "Drishti Corporate Action Lifecycle API",
 		version: "1.0.0",
 		description:
-			"Track corporate actions for watched Indian-listed companies. Add a symbol to import its Drishti announcement history, reconstruct related filings into one lifecycle, and keep it current with live announcement updates. Every displayed fact retains a link to its original exchange filing.",
+			"Track corporate actions for watched Indian-listed companies, beginning with six core lifecycle types. Drishti WebSocket deliveries provide continuous updates; REST is reserved for historical backfill, reconnect recovery, and verification. Every displayed fact retains a link to its original exchange filing.",
 	},
 	servers: [
 		{
@@ -136,9 +136,9 @@ export const openApiDocument = {
 		"/api/symbols/{symbol}": {
 			delete: {
 				tags: ["Symbols"],
-				summary: "Remove a symbol and its lifecycle data",
+				summary: "Stop monitoring a symbol",
 				description:
-					"Stops monitoring the symbol and removes its locally stored announcements and reconstructed lifecycles. This does not alter any upstream exchange or Drishti data.",
+					"Stops monitoring the symbol and hides its reconstructed lifecycles. Cached source announcements remain available for audit. This does not alter upstream exchange or Drishti data.",
 				parameters: [{ $ref: "#/components/parameters/SymbolPath" }],
 				responses: {
 					"204": { description: "Symbol removed" },
@@ -151,7 +151,7 @@ export const openApiDocument = {
 				tags: ["Symbols"],
 				summary: "Run a REST catch-up for a watched symbol",
 				description:
-					"Fetches announcements backward from the latest page through the most recent corporate action and deterministically rebuilds the symbol's lifecycles. Use this for manual recovery or catch-up; normal updates arrive through the live stream.",
+					"Runs a full historical backfill when the symbol has not completed one; otherwise fetches only the persisted watermark overlap through the current time. Normal updates arrive through the live stream.",
 				parameters: [{ $ref: "#/components/parameters/SymbolPath" }],
 				responses: {
 					"200": {
@@ -275,7 +275,14 @@ export const openApiDocument = {
 					status: { type: "string", const: "ok" },
 					stream: {
 						type: "string",
-						enum: ["connected", "disconnected", "not_configured"],
+						enum: [
+							"connecting",
+							"connected",
+							"backfilling",
+							"degraded",
+							"disconnected",
+							"not_configured",
+						],
 					},
 				},
 			},
@@ -289,6 +296,12 @@ export const openApiDocument = {
 					companyName: { type: "string" },
 					addedAt: { type: "string", format: "date-time" },
 					lastSyncedAt: { type: "string", format: "date-time" },
+					lastAnnouncementAt: { type: "string", format: "date-time" },
+					backfillCompletedAt: { type: "string", format: "date-time" },
+					syncStatus: {
+						type: "string",
+						enum: ["pending", "backfilling", "live", "degraded"],
+					},
 					syncError: { type: "string" },
 				},
 			},
@@ -334,7 +347,7 @@ export const openApiDocument = {
 				type: "object",
 				description:
 					"All reconstructed lifecycles, dashboard summary counts, and live-stream state.",
-				required: ["data", "summary", "stream"],
+				required: ["data", "summary", "stream", "streamDetails"],
 				properties: {
 					data: {
 						type: "array",
@@ -346,8 +359,16 @@ export const openApiDocument = {
 					},
 					stream: {
 						type: "string",
-						enum: ["connected", "disconnected", "not_configured"],
+						enum: [
+							"connecting",
+							"connected",
+							"backfilling",
+							"degraded",
+							"disconnected",
+							"not_configured",
+						],
 					},
+					streamDetails: { type: "object" },
 				},
 			},
 		},

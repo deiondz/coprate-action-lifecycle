@@ -1,6 +1,7 @@
 import type { ApiError } from "@lifecycle/contracts";
 import { Scalar } from "@scalar/hono-api-reference";
 import { Hono } from "hono";
+import { upgradeWebSocket } from "hono/bun";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { z } from "zod";
@@ -22,6 +23,40 @@ export function createApp(service: LifecycleService) {
 		cors({
 			origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",
 			allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+		}),
+	);
+	app.use("/ws/lifecycles", async (context, next) => {
+		const origin = context.req.header("Origin");
+		const allowedOrigin =
+			process.env.FRONTEND_ORIGIN ?? "http://localhost:3000";
+		if (origin && origin !== allowedOrigin) {
+			return context.json<ApiError>({ error: "Origin not allowed." }, 403);
+		}
+		await next();
+	});
+	app.get(
+		"/ws/lifecycles",
+		upgradeWebSocket(() => {
+			let unsubscribe: (() => void) | undefined;
+			return {
+				onOpen: async (_event, socket) => {
+					unsubscribe = service.subscribe((message) => {
+						if (socket.readyState === 1) socket.send(JSON.stringify(message));
+					});
+					try {
+						socket.send(
+							JSON.stringify({
+								type: "snapshot",
+								...(await service.snapshot()),
+							}),
+						);
+					} catch {
+						socket.close(1011, "Snapshot unavailable");
+					}
+				},
+				onClose: () => unsubscribe?.(),
+				onError: () => unsubscribe?.(),
+			};
 		}),
 	);
 

@@ -12,7 +12,7 @@ import {
 	Copy,
 } from "@phosphor-icons/react/dist/ssr";
 import { format } from "date-fns";
-import { type ComponentType, useRef, useState } from "react";
+import { type ComponentType, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { buttonVariants } from "@/components/ui/button";
@@ -126,199 +126,195 @@ export function AdditionalField({
 	isPending,
 }: AdditionalFieldProps) {
 	const inputType = resolveInputType(field);
+	const props = { name, field, isPending };
 
 	if (field.render) {
 		const FieldRenderer = field.render as ComponentType<AdditionalFieldProps>;
-		return <FieldRenderer name={name} field={field} isPending={isPending} />;
+		return <FieldRenderer {...props} />;
 	}
 
-	if (inputType === "hidden") {
-		return (
-			<input
-				type="hidden"
+	switch (inputType) {
+		case "hidden":
+			return <HiddenInput {...props} />;
+		case "textarea":
+			return <TextareaField {...props} />;
+		case "number":
+			return <NumberInputField {...props} />;
+		case "slider":
+			return <SliderField {...props} />;
+		case "switch":
+			return <SwitchField {...props} />;
+		case "checkbox":
+			return <CheckboxField {...props} />;
+		case "select":
+			return <SelectField {...props} />;
+		case "combobox":
+			return <ComboboxField {...props} />;
+		case "date":
+		case "datetime":
+			return <DateInput {...props} />;
+		default:
+			return <InputField {...props} />;
+	}
+}
+
+function HiddenInput({ name, field }: AdditionalFieldProps) {
+	const value =
+		field.defaultValue == null
+			? ""
+			: field.defaultValue instanceof Date
+				? field.defaultValue.toISOString()
+				: String(field.defaultValue);
+
+	return <input type="hidden" name={name} value={value} />;
+}
+
+function TextareaField({ name, field, isPending }: AdditionalFieldProps) {
+	return (
+		<Field>
+			<Label htmlFor={name}>{field.label}</Label>
+			<Textarea
+				id={name}
 				name={name}
-				value={
+				defaultValue={
+					field.defaultValue == null ? undefined : String(field.defaultValue)
+				}
+				placeholder={field.placeholder}
+				required={field.required}
+				readOnly={field.readOnly}
+				disabled={isPending}
+			/>
+			<FieldError />
+		</Field>
+	);
+}
+
+function NumberInputField({ name, field, isPending }: AdditionalFieldProps) {
+	const maxFractionDigits = field.formatOptions?.maximumFractionDigits;
+	return (
+		<Field>
+			<Label htmlFor={name}>{field.label}</Label>
+			<Input
+				id={name}
+				name={name}
+				type="number"
+				inputMode={maxFractionDigits ? "decimal" : "numeric"}
+				min={field.min}
+				max={field.max}
+				step={
+					field.step ??
+					(maxFractionDigits ? 1 / 10 ** maxFractionDigits : undefined)
+				}
+				defaultValue={
 					field.defaultValue == null
-						? ""
-						: field.defaultValue instanceof Date
-							? field.defaultValue.toISOString()
+						? undefined
+						: typeof field.defaultValue === "number"
+							? field.defaultValue
 							: String(field.defaultValue)
 				}
+				placeholder={field.placeholder}
+				required={field.required}
+				readOnly={field.readOnly}
+				disabled={isPending}
 			/>
-		);
-	}
+			<FieldError />
+		</Field>
+	);
+}
 
-	if (inputType === "textarea") {
-		return (
-			<Field>
-				<Label htmlFor={name}>{field.label}</Label>
+function SwitchField({ name, field, isPending }: AdditionalFieldProps) {
+	return (
+		<Field orientation="horizontal">
+			<Switch
+				id={name}
+				name={name}
+				defaultChecked={
+					field.defaultValue === true || field.defaultValue === "true"
+				}
+				disabled={isPending || field.readOnly}
+			/>
+			<FieldContent>
+				<FieldLabel htmlFor={name}>{field.label}</FieldLabel>
+			</FieldContent>
+		</Field>
+	);
+}
 
-				<Textarea
-					id={name}
-					name={name}
-					defaultValue={
-						field.defaultValue == null ? undefined : String(field.defaultValue)
-					}
-					placeholder={field.placeholder}
-					required={field.required}
-					readOnly={field.readOnly}
-					disabled={isPending}
-				/>
+function CheckboxField({ name, field, isPending }: AdditionalFieldProps) {
+	return (
+		<Field orientation="horizontal">
+			<Checkbox
+				id={name}
+				name={name}
+				defaultChecked={
+					field.defaultValue === true || field.defaultValue === "true"
+				}
+				required={field.required}
+				disabled={isPending || field.readOnly}
+			/>
+			<FieldContent>
+				<FieldLabel htmlFor={name}>{field.label}</FieldLabel>
+			</FieldContent>
+		</Field>
+	);
+}
 
-				<FieldError />
-			</Field>
-		);
-	}
+function SelectField({ name, field, isPending }: AdditionalFieldProps) {
+	return (
+		<Field>
+			<Label htmlFor={name}>{field.label}</Label>
+			<Select
+				name={name}
+				defaultValue={
+					field.defaultValue != null ? String(field.defaultValue) : undefined
+				}
+				required={field.required}
+				disabled={isPending || field.readOnly}
+			>
+				<SelectTrigger id={name} className="w-full">
+					<SelectValue placeholder={field.placeholder} />
+				</SelectTrigger>
+				<SelectContent>
+					{field.options?.map((option) => (
+						<SelectItem key={option.value} value={option.value}>
+							{option.label}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			<FieldError />
+		</Field>
+	);
+}
 
-	if (inputType === "number") {
-		const maxFractionDigits = field.formatOptions?.maximumFractionDigits;
-
-		return (
-			<Field>
-				<Label htmlFor={name}>{field.label}</Label>
-
-				<Input
-					id={name}
-					name={name}
-					type="number"
-					inputMode={maxFractionDigits ? "decimal" : "numeric"}
-					min={field.min}
-					max={field.max}
-					step={
-						field.step ??
-						(maxFractionDigits ? 1 / 10 ** maxFractionDigits : undefined)
-					}
-					defaultValue={
-						field.defaultValue == null
-							? undefined
-							: typeof field.defaultValue === "number"
-								? field.defaultValue
-								: String(field.defaultValue)
-					}
-					placeholder={field.placeholder}
-					required={field.required}
-					readOnly={field.readOnly}
-					disabled={isPending}
-				/>
-
-				<FieldError />
-			</Field>
-		);
-	}
-
-	if (inputType === "slider") {
-		return <SliderField name={name} field={field} isPending={isPending} />;
-	}
-
-	if (inputType === "switch") {
-		return (
-			<Field orientation="horizontal">
-				<Switch
-					id={name}
-					name={name}
-					defaultChecked={
-						field.defaultValue === true || field.defaultValue === "true"
-					}
-					disabled={isPending || field.readOnly}
-				/>
-
-				<FieldContent>
-					<FieldLabel htmlFor={name}>{field.label}</FieldLabel>
-				</FieldContent>
-			</Field>
-		);
-	}
-
-	if (inputType === "checkbox") {
-		return (
-			<Field orientation="horizontal">
-				<Checkbox
-					id={name}
-					name={name}
-					defaultChecked={
-						field.defaultValue === true || field.defaultValue === "true"
-					}
-					required={field.required}
-					disabled={isPending || field.readOnly}
-				/>
-
-				<FieldContent>
-					<FieldLabel htmlFor={name}>{field.label}</FieldLabel>
-				</FieldContent>
-			</Field>
-		);
-	}
-
-	if (inputType === "select") {
-		return (
-			<Field>
-				<Label htmlFor={name}>{field.label}</Label>
-
-				<Select
-					name={name}
-					defaultValue={
-						field.defaultValue != null ? String(field.defaultValue) : undefined
-					}
-					required={field.required}
-					disabled={isPending || field.readOnly}
-				>
-					<SelectTrigger id={name} className="w-full">
-						<SelectValue placeholder={field.placeholder} />
-					</SelectTrigger>
-
-					<SelectContent>
-						{field.options?.map((option) => (
-							<SelectItem key={option.value} value={option.value}>
+function ComboboxField({ name, field, isPending }: AdditionalFieldProps) {
+	return (
+		<Field>
+			<Label htmlFor={name}>{field.label}</Label>
+			<Combobox
+				items={field.options ?? []}
+				name={name}
+				defaultValue={
+					field.defaultValue != null ? String(field.defaultValue) : undefined
+				}
+				required={field.required}
+				disabled={isPending || field.readOnly}
+			>
+				<ComboboxInput placeholder={field.placeholder} id={name} />
+				<ComboboxContent>
+					<ComboboxEmpty>No items found.</ComboboxEmpty>
+					<ComboboxList>
+						{(option) => (
+							<ComboboxItem key={option.value} value={option}>
 								{option.label}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-
-				<FieldError />
-			</Field>
-		);
-	}
-
-	if (inputType === "combobox") {
-		return (
-			<Field>
-				<Label htmlFor={name}>{field.label}</Label>
-
-				<Combobox
-					items={field.options ?? []}
-					name={name}
-					defaultValue={
-						field.defaultValue != null ? String(field.defaultValue) : undefined
-					}
-					required={field.required}
-					disabled={isPending || field.readOnly}
-				>
-					<ComboboxInput placeholder={field.placeholder} id={name} />
-
-					<ComboboxContent>
-						<ComboboxEmpty>No items found.</ComboboxEmpty>
-
-						<ComboboxList>
-							{(option) => (
-								<ComboboxItem key={option.value} value={option}>
-									{option.label}
-								</ComboboxItem>
-							)}
-						</ComboboxList>
-					</ComboboxContent>
-				</Combobox>
-
-				<FieldError />
-			</Field>
-		);
-	}
-
-	if (inputType === "date" || inputType === "datetime") {
-		return <DateInput name={name} field={field} isPending={isPending} />;
-	}
-
-	return <InputField name={name} field={field} isPending={isPending} />;
+							</ComboboxItem>
+						)}
+					</ComboboxList>
+				</ComboboxContent>
+			</Combobox>
+			<FieldError />
+		</Field>
+	);
 }
 
 function InputField({ name, field, isPending }: AdditionalFieldProps) {
@@ -434,7 +430,10 @@ function SliderField({ name, field, isPending }: AdditionalFieldProps) {
 
 	const [value, setValue] = useState<number>(initial);
 
-	const formatter = new Intl.NumberFormat(undefined, field.formatOptions);
+	const formatter = useMemo(
+		() => new Intl.NumberFormat(undefined, field.formatOptions),
+		[field.formatOptions],
+	);
 
 	return (
 		<Field>

@@ -31,7 +31,7 @@ export function Providers({
 			<AuthProvider
 				authClient={authClient}
 				emailAndPassword={{
-					enabled: emailDeliveryEnabled,
+					enabled: true,
 					forgotPassword: emailDeliveryEnabled,
 					requireEmailVerification: emailDeliveryEnabled,
 				}}

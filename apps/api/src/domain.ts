@@ -5,6 +5,7 @@ import type {
 	LifecycleStage,
 	LifecycleTerm,
 } from "@lifecycle/contracts";
+import { CORE_ACTION_TYPES } from "@lifecycle/contracts";
 
 export type SourceAnnouncement = {
 	id: string;
@@ -39,6 +40,13 @@ type ActionDefinition = {
 	maxGapDays: number;
 	stages: StageDefinition[];
 };
+
+const INDIA_DATE_FORMATTER = new Intl.DateTimeFormat("en-IN", {
+	day: "numeric",
+	month: "short",
+	year: "numeric",
+	timeZone: "Asia/Kolkata",
+});
 
 const commonCompleted = {
 	id: "completed",
@@ -538,6 +546,7 @@ const TERM_LABELS: Record<string, string> = {
 	appointed_date: "Appointed date",
 	bonus_ratio: "Bonus ratio",
 	buyback_price: "Buyback price",
+	buyback_percentage: "Buyback percentage",
 	buyback_type: "Buyback type",
 	closing_date: "Closing date",
 	conversion_price: "Conversion price",
@@ -547,51 +556,91 @@ const TERM_LABELS: Record<string, string> = {
 	effective_date: "Effective date",
 	ex_date: "Ex-date",
 	face_value: "Face value",
+	face_value_after: "New face value",
+	face_value_before: "Old face value",
 	final_price: "Final price",
 	floor_price: "Floor price",
 	issue_price: "Issue price",
 	issue_size: "Issue size",
+	entities: "Entities",
+	entitlement_ratio: "Entitlement ratio",
 	listing_date: "Listing date",
 	maximum_amount: "Maximum amount",
 	maximum_shares: "Maximum shares",
+	new_company_names: "New companies",
 	new_face_value: "New face value",
+	no_of_shares: "Number of shares",
 	number_of_shares: "Number of shares",
 	old_face_value: "Old face value",
 	open_date: "Opening date",
 	opening_date: "Opening date",
 	payment_date: "Payment date",
+	percentage: "Percentage",
+	period: "Period",
+	price: "Price",
 	record_date: "Record date",
 	renunciation_date: "Renunciation date",
 	rights_ratio: "Rights ratio",
 	shares_allotted: "Shares allotted",
 	shares_offered: "Shares offered",
+	share_ratios: "Share ratios",
+	segments_demerged: "Segments demerged",
 	split_ratio: "Split ratio",
 	swap_ratio: "Swap ratio",
+	total_shares_approved: "Total shares approved",
 	warrants_converted: "Warrants converted",
 };
 
-type ExtractedTerm = { key: string; label: string; value: string };
+const TERM_KEY_ALIASES: Partial<Record<ActionType, Record<string, string>>> = {
+	"Bonus Issue": { face_value_after: "new_face_value" },
+	Buyback: {
+		no_of_shares: "number_of_shares",
+		price: "buyback_price",
+		percentage: "buyback_percentage",
+	},
+	"Rights Issue": {
+		total_shares_approved: "maximum_shares",
+		price: "issue_price",
+		entitlement_ratio: "rights_ratio",
+	},
+	"Stock Split": {
+		face_value_before: "old_face_value",
+		face_value_after: "new_face_value",
+	},
+	Merger: { share_ratios: "swap_ratio" },
+	Demerger: { share_ratios: "swap_ratio" },
+};
+
+const CORE_ACTION_SET = new Set<ActionType>(CORE_ACTION_TYPES);
+
+type ExtractedTerm = {
+	key: string;
+	label: string;
+	value: string;
+	rawValue: unknown;
+	normalizedValue?: string | number | boolean | string[];
+};
 type Cluster = {
 	events: SourceAnnouncement[];
 	anchor?: string;
 	ambiguous: boolean;
 };
 
+type BuildLifecycleOptions = {
+	existing?: CorporateActionLifecycle[];
+	createId?: () => string;
+};
+
 export function buildLifecycles(
 	announcements: SourceAnnouncement[],
+	options: BuildLifecycleOptions = {},
 ): CorporateActionLifecycle[] {
 	const classified = announcements
-		.map((announcement) => ({
-			announcement,
-			definition: classifyAnnouncement(announcement),
-		}))
-		.filter(
-			(
-				item,
-			): item is {
-				announcement: SourceAnnouncement;
-				definition: ActionDefinition;
-			} => Boolean(item.definition),
+		.flatMap((announcement) =>
+			classifyDefinitions(announcement).map((definition) => ({
+				announcement,
+				definition,
+			})),
 		)
 		.sort(
 			(a, b) =>
@@ -635,13 +684,31 @@ export function buildLifecycles(
 	}
 
 	const result: CorporateActionLifecycle[] = [];
+	const claimedExistingIds = new Set<string>();
 	for (const [key, clusters] of groups) {
 		const type = key.slice(key.indexOf(":") + 1) as ActionType;
 		const definition = ACTION_DEFINITIONS.find((item) => item.type === type);
 		if (!definition) continue;
-		result.push(
-			...clusters.map((cluster) => buildLifecycle(cluster, definition)),
-		);
+		for (const cluster of clusters) {
+			const existingId = options.existing?.find((lifecycle) => {
+				if (
+					claimedExistingIds.has(lifecycle.id) ||
+					lifecycle.actionType !== definition.type ||
+					lifecycle.symbol !== cluster.events[0]?.symbol
+				)
+					return false;
+				const eventIds = new Set(cluster.events.map((event) => event.id));
+				return lifecycle.announcements.some((event) => eventIds.has(event.id));
+			})?.id;
+			if (existingId) claimedExistingIds.add(existingId);
+			result.push(
+				buildLifecycle(
+					cluster,
+					definition,
+					existingId ?? options.createId?.() ?? crypto.randomUUID(),
+				),
+			);
+		}
 	}
 
 	return result.sort(
@@ -652,12 +719,19 @@ export function buildLifecycles(
 export function isCorporateActionAnnouncement(
 	announcement: SourceAnnouncement,
 ): boolean {
-	return Boolean(classifyAnnouncement(announcement));
+	return classifyDefinitions(announcement).length > 0;
+}
+
+export function classifyAnnouncement(
+	announcement: SourceAnnouncement,
+): ActionType[] {
+	return classifyDefinitions(announcement).map((definition) => definition.type);
 }
 
 function buildLifecycle(
 	cluster: Cluster,
 	definition: ActionDefinition,
+	id: string,
 ): CorporateActionLifecycle {
 	const events = cluster.events;
 	const first = events[0];
@@ -665,12 +739,12 @@ function buildLifecycle(
 	const stageHits = new Map<number, SourceAnnouncement>();
 	const termsByKey = new Map<string, LifecycleTerm>();
 	const changes: LifecycleChange[] = [];
-	let highestStage = 0;
+	let highestStage = -1;
 
 	for (const event of events) {
 		const extractedTerms = extractTerms(event, definition);
 		const text = announcementText(event);
-		let eventStage = 0;
+		let eventStage = -1;
 		for (const [index, stage] of definition.stages.entries()) {
 			const matchesText = stage.patterns.some((pattern) => pattern.test(text));
 			if (matchesText) {
@@ -690,7 +764,7 @@ function buildLifecycle(
 				title: stage.label,
 				announcementId: event.id,
 			});
-		} else {
+		} else if (eventStage >= 0) {
 			stageHits.set(eventStage, stageHits.get(eventStage) ?? event);
 		}
 
@@ -700,6 +774,8 @@ function buildLifecycle(
 			const certainty = isDateKey(term.key) ? "confirmed" : undefined;
 			termsByKey.set(term.key, {
 				...term,
+				evidenceSource: "structured",
+				observedAt: event.date,
 				certainty,
 				announcementId: event.id,
 			});
@@ -749,7 +825,7 @@ function buildLifecycle(
 		if (state === "cancelled" && index >= highestStage) status = "cancelled";
 		else if (index === highestStage)
 			status = state === "completed" ? "completed" : "current";
-		else if (index < highestStage) status = hit ? "completed" : "skipped";
+		else if (index < highestStage && hit) status = "completed";
 		return {
 			id: stage.id,
 			label: stage.label,
@@ -757,6 +833,7 @@ function buildLifecycle(
 			date: hit?.date,
 			dateCertainty: hit ? "confirmed" : undefined,
 			announcementIds: hit ? [hit.id] : undefined,
+			evidence: hit ? stageEvidence(hit, changes) : undefined,
 		};
 	});
 
@@ -783,7 +860,7 @@ function buildLifecycle(
 	}
 
 	return {
-		id: `${first.symbol.toLowerCase()}-${slug(definition.type)}-${first.id}`,
+		id,
 		symbol: first.symbol,
 		companyName: last.companyName || first.companyName || first.symbol,
 		companyLogo: [...events].reverse().find((event) => event.companyLogo)
@@ -800,7 +877,7 @@ function buildLifecycle(
 					? "Cancelled"
 					: state === "completed"
 						? "Completed"
-						: current.label,
+						: (current?.label ?? "Announced"),
 		state,
 		createdAt: first.date,
 		updatedAt: last.date,
@@ -831,18 +908,24 @@ function buildLifecycle(
 	};
 }
 
-function classifyAnnouncement(
+function classifyDefinitions(
 	announcement: SourceAnnouncement,
-): ActionDefinition | undefined {
+): ActionDefinition[] {
 	const root = asRecord(announcement.extractedInformation);
-	for (const definition of ACTION_DEFINITIONS) {
-		if (definition.extractionKeys.some((key) => root[key] != null))
-			return definition;
-	}
-	const text = announcementText(announcement);
-	return ACTION_DEFINITIONS.find((definition) =>
-		definition.aliases.some((pattern) => pattern.test(text)),
-	);
+	const categoryText = [
+		announcement.category,
+		...announcement.relatedCategories,
+	].join(" ");
+	return ACTION_DEFINITIONS.filter((definition) => {
+		if (!CORE_ACTION_SET.has(definition.type)) return false;
+		const structured = definition.extractionKeys.some((key) =>
+			isValidExtraction(root[key]),
+		);
+		const categorized = definition.aliases.some((pattern) =>
+			pattern.test(categoryText),
+		);
+		return structured || categorized;
+	});
 }
 
 function extractTerms(
@@ -850,11 +933,23 @@ function extractTerms(
 	definition: ActionDefinition,
 ): ExtractedTerm[] {
 	const root = asRecord(announcement.extractedInformation);
-	const nestedKey = definition.extractionKeys.find((key) => root[key] != null);
+	const nestedKey = definition.extractionKeys.find((key) =>
+		isValidExtraction(root[key]),
+	);
 	const source = nestedKey ? asRecord(root[nestedKey]) : root;
 	return Object.entries(source).flatMap(([key, value]) => {
-		if (!(key in TERM_LABELS) || value == null || value === "") return [];
-		return [{ key, label: TERM_LABELS[key], value: formatValue(key, value) }];
+		if (key === "status" || value == null || value === "") return [];
+		const canonicalKey = TERM_KEY_ALIASES[definition.type]?.[key] ?? key;
+		if (!(canonicalKey in TERM_LABELS)) return [];
+		return [
+			{
+				key: canonicalKey,
+				label: TERM_LABELS[canonicalKey],
+				value: formatValue(canonicalKey, value),
+				rawValue: value,
+				normalizedValue: normalizeTermValue(canonicalKey, value),
+			},
+		];
 	});
 }
 
@@ -881,15 +976,61 @@ function findNextDate(
 	return stage?.termKeys?.map((key) => terms.get(key)?.value).find(Boolean);
 }
 
+function stageEvidence(
+	event: SourceAnnouncement,
+	changes: LifecycleChange[],
+): NonNullable<LifecycleStage["evidence"]> {
+	const change = changes.find((item) => item.announcementId === event.id);
+	const changedValue =
+		change?.previousValue && change.newValue
+			? `${change.title}: ${change.previousValue} to ${change.newValue}`
+			: change?.title;
+	return {
+		announcementId: event.id,
+		date: event.date,
+		summary: event.summary ?? event.headline,
+		criticalAspect: changedValue ?? event.descriptor ?? event.headline,
+	};
+}
+
 function announcementText(announcement: SourceAnnouncement): string {
 	return [
 		announcement.category,
 		...announcement.relatedCategories,
 		announcement.descriptor,
 		announcement.headline,
+		announcement.summary,
+		announcement.longSummary,
 	]
 		.filter(Boolean)
 		.join(" ");
+}
+
+function isValidExtraction(value: unknown): boolean {
+	const record = asRecord(value);
+	return (
+		Object.keys(record).length > 0 &&
+		String(record.status ?? "").toLowerCase() !== "failed"
+	);
+}
+
+function normalizeTermValue(
+	key: string,
+	value: unknown,
+): string | number | boolean | string[] | undefined {
+	if (isDateKey(key) && typeof value === "string") {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+	}
+	if (
+		typeof value === "string" ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+	)
+		return value;
+	if (Array.isArray(value) && value.every((item) => typeof item === "string"))
+		return value;
+	return undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -902,12 +1043,7 @@ function formatValue(key: string, value: unknown): string {
 	if (isDateKey(key) && typeof value === "string") {
 		const date = new Date(value);
 		if (!Number.isNaN(date.getTime())) {
-			return new Intl.DateTimeFormat("en-IN", {
-				day: "numeric",
-				month: "short",
-				year: "numeric",
-				timeZone: "Asia/Kolkata",
-			}).format(date);
+			return INDIA_DATE_FORMATTER.format(date);
 		}
 	}
 	if (typeof value === "number") {
@@ -922,11 +1058,4 @@ function formatValue(key: string, value: unknown): string {
 
 function isDateKey(key: string): boolean {
 	return key.endsWith("_date") || key === "open_date" || key === "closing_date";
-}
-
-function slug(value: string): string {
-	return value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/(^-|-$)/g, "");
 }

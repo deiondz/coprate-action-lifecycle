@@ -1,9 +1,6 @@
 import { DrishtiClient, type DrishtiWebSocketSession } from "drishti-sdk";
 
-import {
-	isCorporateActionAnnouncement,
-	type SourceAnnouncement,
-} from "./domain";
+import type { SourceAnnouncement } from "./domain";
 
 export type SymbolIdentity = {
 	symbol: string;
@@ -11,14 +8,29 @@ export type SymbolIdentity = {
 	companyLogo?: string;
 };
 
+export type AnnouncementWindow = { from?: string; to?: string };
+export type StreamHandle = {
+	close(): Promise<void>;
+	connected(): boolean;
+	replaceSymbols(symbols: string[]): Promise<void>;
+};
+export type StreamCallbacks = {
+	onConnected(reconnected: boolean): void;
+	onDisconnected(reason: string): void;
+	onError(error: Error): void;
+};
+
 export interface MarketDataSource {
 	resolveSymbol(symbol: string): Promise<SymbolIdentity | undefined>;
-	listAnnouncements(symbol: string): Promise<SourceAnnouncement[]>;
+	listAnnouncements(
+		symbol: string,
+		window?: AnnouncementWindow,
+	): Promise<SourceAnnouncement[]>;
 	openStream(
 		symbols: string[],
-		onAnnouncement: (announcement: SourceAnnouncement) => Promise<void>,
-		onReconnect: () => void,
-	): Promise<{ close(): Promise<void>; connected(): boolean }>;
+		onAnnouncement: (announcement: SourceAnnouncement) => void,
+		callbacks: StreamCallbacks,
+	): Promise<StreamHandle>;
 	getSourceDocument(id: string): Promise<Response>;
 }
 
@@ -51,22 +63,25 @@ export class DrishtiMarketDataSource implements MarketDataSource {
 			: undefined;
 	}
 
-	async listAnnouncements(symbol: string): Promise<SourceAnnouncement[]> {
+	async listAnnouncements(
+		symbol: string,
+		window: AnnouncementWindow = {},
+	): Promise<SourceAnnouncement[]> {
 		const result: SourceAnnouncement[] = [];
 		for (let page = 1; ; page += 1) {
 			const response = await this.client.getAnnouncements({
 				symbols: [symbol],
+				from: window.from,
+				to: window.to,
 				detailed: true,
 				page,
 				limit: 50,
 			});
-			const announcements = response.data.map(normalizeAnnouncement);
+			const announcements = response.data.map((row) =>
+				normalizeAnnouncement(row, symbol),
+			);
 			result.push(...announcements);
-			if (
-				announcements.some(isCorporateActionAnnouncement) ||
-				!response.has_next ||
-				announcements.length === 0
-			) {
+			if (!response.has_next || announcements.length === 0) {
 				break;
 			}
 		}
@@ -75,17 +90,27 @@ export class DrishtiMarketDataSource implements MarketDataSource {
 
 	async openStream(
 		symbols: string[],
-		onAnnouncement: (announcement: SourceAnnouncement) => Promise<void>,
-		onReconnect: () => void,
-	): Promise<{ close(): Promise<void>; connected(): boolean }> {
+		onAnnouncement: (announcement: SourceAnnouncement) => void,
+		callbacks: StreamCallbacks,
+	): Promise<StreamHandle> {
 		let opened = false;
 		const session: DrishtiWebSocketSession = this.client.websocket({
 			onOpen: () => {
-				if (opened) onReconnect();
+				callbacks.onConnected(opened);
 				opened = true;
 			},
-			onAnnouncements: async (row) => {
-				await onAnnouncement(normalizeAnnouncement(row));
+			onClose: (reason) => callbacks.onDisconnected(reason),
+			onError: (event) => {
+				if (event.kind === "error") callbacks.onError(new Error(event.message));
+			},
+			onAnnouncements: (row) => {
+				try {
+					onAnnouncement(normalizeAnnouncement(row));
+				} catch (error) {
+					callbacks.onError(
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
 			},
 			reconnectInitialDelayMs: 1_000,
 			reconnectMaxDelayMs: 30_000,
@@ -98,6 +123,13 @@ export class DrishtiMarketDataSource implements MarketDataSource {
 		return {
 			close: () => session.close(),
 			connected: () => session.connected,
+			replaceSymbols: async (nextSymbols) => {
+				await session.subscribe({
+					product: "announcements",
+					symbols: nextSymbols,
+					detailed: true,
+				});
+			},
 		};
 	}
 
@@ -136,12 +168,16 @@ export class DrishtiMarketDataSource implements MarketDataSource {
 	}
 }
 
-function normalizeAnnouncement(value: unknown): SourceAnnouncement {
+function normalizeAnnouncement(
+	value: unknown,
+	fallbackSymbol?: string,
+): SourceAnnouncement {
 	const row = asRecord(value);
 	const id = requiredString(row.id, "announcement id");
-	const symbol = requiredString(
-		row.symbol,
-		"announcement symbol",
+	const symbol = (
+		stringValue(row.symbol) ??
+		stringValue(fallbackSymbol) ??
+		requiredString(row.symbol, "announcement symbol")
 	).toUpperCase();
 	return {
 		id,
@@ -191,7 +227,7 @@ function requiredString(value: unknown, label: string): string {
 
 function normalizeDate(value: unknown): string {
 	const date = new Date(stringValue(value) ?? "");
-	return Number.isNaN(date.getTime())
-		? new Date().toISOString()
-		: date.toISOString();
+	if (Number.isNaN(date.getTime()))
+		throw new Error("Drishti returned an invalid announcement date");
+	return date.toISOString();
 }

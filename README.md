@@ -5,7 +5,9 @@ Track Indian listed-company corporate actions as persistent, source-linked lifec
 The product has two services:
 
 - A Next.js frontend where a user adds NSE/BSE symbols and reviews reconstructed lifecycles.
-- A Hono backend that uses the official `drishti-sdk`, stores filings and lifecycle documents in MongoDB, performs REST catch-up, and listens for near-live announcement updates over WebSocket.
+- A Hono backend that uses the official `drishti-sdk`, stores filings and lifecycle documents in MongoDB, performs bounded REST backfills, and listens for near-live announcement updates over WebSocket.
+
+Continuous updates are WebSocket-only on both legs: Drishti to the backend and the backend to the browser. REST is used for initial history, reconnect-gap recovery, symbol verification, and explicit manual synchronization; there is no scheduled polling.
 
 ## Run with Docker
 
@@ -45,6 +47,7 @@ DRISHTI_API_KEY=your-key
 MONGODB_URI=mongodb://localhost:27017/corporate_actions
 API_INTERNAL_URL=http://localhost:4000
 PUBLIC_API_URL=http://localhost:4000
+NEXT_PUBLIC_LIFECYCLE_WS_URL=ws://localhost:4000/ws/lifecycles
 ```
 
 The existing auth routes also use the Better Auth and MongoDB variables documented in `.env.example`; they are not required for the public monitor screen.
@@ -62,11 +65,16 @@ POST   /api/symbols/:symbol/sync
 GET    /api/lifecycles
 GET    /api/lifecycles/:id
 GET    /api/announcements/:id/source
+WS     /ws/lifecycles
 GET    /openapi.json
 GET    /docs
 ```
 
-When a symbol is added, the backend validates it through Drishti symbol metadata, retrieves announcement pages backward through the most recent corporate action, deduplicates by announcement ID, reconstructs action-type-specific lifecycles, and updates its WebSocket subscription. If no corporate action is found, the backfill continues to the end of the available announcement history. Reconnects trigger the same REST catch-up because the live stream is not treated as a replay buffer.
+When a symbol is added, the backend validates it through Drishti symbol metadata, updates the active WebSocket subscription, and exhausts every available detailed announcement page through a fixed cutoff. Later reconnects fetch only from the persisted announcement watermark minus a ten-minute safety overlap. Announcement-ID upserts make that overlap idempotent.
+
+The version-two lifecycle collection exposes Bonus Issue, Buyback, Rights Issue, Stock Split, Merger, and Demerger. One filing can update multiple lifecycles. Other announcement categories remain in the source collection for audit and future replay but are not promoted to visible lifecycles.
+
+The browser socket sends an initial snapshot followed by lifecycle upserts, deletions, stream states, and heartbeats. `NEXT_PUBLIC_LIFECYCLE_WS_URL` is a build-time Next.js variable; production builds must set it to the public `wss://` endpoint.
 
 ## Verification
 
@@ -77,6 +85,9 @@ bun run lint
 bun run build
 docker compose config
 docker compose build
+
+# Optional: replay exported announcement category files
+bun run profile:announcements -- C:/path/to/announcement_exports
 ```
 
-Tests cover rights-issue grouping, term changes, incomplete extraction, ambiguous matching, symbol validation, API responses, and announcement deduplication.
+Tests cover full pagination, bounded recovery windows, stream-before-backfill ordering, live socket broadcasts, core-six multi-action classification, term provenance, failed extraction, stable ID reuse, symbol validation, and API responses.

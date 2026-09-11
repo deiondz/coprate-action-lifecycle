@@ -35,7 +35,9 @@ export const auth = betterAuth({
 			}
 		: {}),
 	emailAndPassword: {
-		enabled: emailDeliveryEnabled,
+		// Credential auth must not depend on transactional email. Delivery is
+		// only required for verification and password-recovery flows below.
+		enabled: true,
 		requireEmailVerification: emailDeliveryEnabled,
 		...(emailDeliveryEnabled
 			? {
