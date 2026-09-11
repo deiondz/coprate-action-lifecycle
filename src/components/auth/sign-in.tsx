@@ -126,24 +126,24 @@ export function SignIn({
 	return (
 		<div
 			className={cn(
-				"flex h-full w-full flex-col md:h-auto md:max-w-[440px] md:px-4 md:py-6",
+				"mat-well flex w-full flex-col rounded-[14px] p-2 lg:max-w-[380px]",
 				className,
 			)}
 		>
-			<Card className="min-h-full overflow-hidden rounded-none border-x-0 border-y-0 pb-0 shadow-none md:min-h-0 md:rounded-2xl md:border md:shadow-xs/5">
-				<CardHeader className="justify-items-center gap-2 px-6 pb-5 pt-10 text-center md:pt-9">
-					<Logo className="mb-5 h-9" />
+			<Card className="mat-panel overflow-hidden rounded-[11px] border-0 pb-0 shadow-none before:hidden">
+				<CardHeader className="justify-items-start gap-2 px-6 pb-5 pt-7 text-left">
+					<Logo className="mb-4 h-7" />
 
-					<CardTitle className="text-[2rem] font-semibold leading-none tracking-normal md:text-[2.125rem]">
+					<CardTitle className="text-[26px] font-medium leading-none tracking-[-0.035em]">
 						{localization.auth.signIn}
 					</CardTitle>
 
-					<CardDescription className="max-w-[21rem] text-balance text-base leading-6">
+					<CardDescription className="max-w-[28ch] text-pretty text-[13.5px] leading-6 text-ink-2">
 						Welcome back. Please sign in to continue.
 					</CardDescription>
 				</CardHeader>
 
-				<CardContent className="px-6 pb-6 pt-0 md:px-7">
+				<CardContent className="px-6 pb-6 pt-0">
 					<div className="flex flex-col gap-5">
 						{(socialPosition === "top" || socialPosition === "bottom") &&
 							hasSocialProviders && (
@@ -303,11 +303,21 @@ export function SignIn({
 								</FieldGroup>
 							</form>
 						)}
+
+						{!emailAndPassword?.enabled &&
+							plugins.flatMap((plugin) =>
+								(plugin.authButtons ?? []).map((AuthButton, index) => (
+									<AuthButton
+										key={`${plugin.id}-${index.toString()}`}
+										view="signIn"
+									/>
+								)),
+							)}
 					</div>
 				</CardContent>
 
 				{emailAndPassword?.enabled && (
-					<CardFooter className="mt-auto justify-center rounded-none border-t px-6 py-6 md:rounded-b-2xl md:bg-muted/72">
+					<CardFooter className="mt-auto justify-center border-hairline border-t bg-sub px-6 py-5">
 						<FieldDescription className="text-center text-base leading-6 md:text-sm">
 							{localization.auth.needToCreateAnAccount}{" "}
 							<Link
@@ -320,18 +330,6 @@ export function SignIn({
 					</CardFooter>
 				)}
 			</Card>
-
-			<div className="hidden w-full flex-col gap-y-4 px-px py-6 text-center text-muted-foreground text-sm md:flex md:flex-row md:justify-between">
-				<div>© 2026</div>
-				<div className="space-x-4">
-					<a className="underline underline-offset-4" href="/terms">
-						Terms
-					</a>
-					<a className="underline underline-offset-4" href="/privacy">
-						Privacy
-					</a>
-				</div>
-			</div>
 		</div>
 	);
 }

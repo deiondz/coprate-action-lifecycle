@@ -1,13 +1,19 @@
 "use client";
 
-import { Gear, House } from "@phosphor-icons/react/dist/ssr";
+import {
+	CalendarBlank,
+	ClockCounterClockwise,
+	Gear,
+	House,
+	Star,
+} from "@phosphor-icons/react/dist/ssr";
 import type { User as BetterAuthUser } from "better-auth";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentProps } from "react";
 
 import { UserButton } from "@/components/auth/user/user-button";
-import { Logo } from "@/components/logo";
+import { Signature } from "@/components/signature";
 import {
 	Sidebar,
 	SidebarContent,
@@ -24,7 +30,7 @@ export function AppSidebar({
 	session,
 	...props
 }: ComponentProps<typeof Sidebar> & {
-	session: {
+	session?: {
 		user: BetterAuthUser & {
 			username?: string | null;
 			displayUsername?: string | null;
@@ -34,25 +40,42 @@ export function AppSidebar({
 	const pathname = usePathname();
 	const navMain = [
 		{
-			title: "Dashboard",
+			title: "Monitor",
 			href: "/",
 			icon: House,
 			isActive: pathname === "/",
 		},
 		{
-			title: "Settings",
-			href: "/settings/account",
-			icon: Gear,
-			isActive: pathname.startsWith("/settings"),
-			items: [
-				{ title: "Account", href: "/settings/account" },
-				{ title: "Security", href: "/settings/security" },
-			],
+			title: "Calendar",
+			href: "/#calendar",
+			icon: CalendarBlank,
+			isActive: false,
 		},
+		{ title: "Watchlist", href: "/#watchlist", icon: Star, isActive: false },
+		{
+			title: "Company history",
+			href: "/#history",
+			icon: ClockCounterClockwise,
+			isActive: false,
+		},
+		...(session
+			? [
+					{
+						title: "Settings",
+						href: "/settings/account",
+						icon: Gear,
+						isActive: pathname.startsWith("/settings"),
+						items: [
+							{ title: "Account", href: "/settings/account" },
+							{ title: "Security", href: "/settings/security" },
+						],
+					},
+				]
+			: []),
 	];
 
 	return (
-		<Sidebar variant="inset" {...props}>
+		<Sidebar variant="sidebar" {...props}>
 			<SidebarHeader>
 				<SidebarMenu>
 					<SidebarMenuItem>
@@ -60,12 +83,22 @@ export function AppSidebar({
 							size="lg"
 							render={
 								<Link href="/">
-									<div className="flex aspect-square size-8 items-center justify-center">
-										<Logo alt="Nevin" className="h-8 w-auto" />
+									<div className="flex h-8 items-center text-foreground">
+										<Signature
+											text="Drishti"
+											color="currentColor"
+											fontSize={40}
+											duration={0.65}
+											className="h-7 w-auto overflow-visible"
+										/>
 									</div>
 									<div className="grid flex-1 text-left text-sm leading-tight">
-										<span className="truncate font-medium">Nevin</span>
-										<span className="truncate text-xs">Auth starter</span>
+										<span className="truncate font-medium tracking-[-0.02em]">
+											Drishti
+										</span>
+										<span className="meta truncate uppercase text-ink-3">
+											Corporate actions
+										</span>
 									</div>
 								</Link>
 							}
@@ -76,14 +109,16 @@ export function AppSidebar({
 			<SidebarContent>
 				<NavMain items={navMain} />
 			</SidebarContent>
-			<SidebarFooter>
-				<UserButton
-					align="start"
-					className="w-full justify-start"
-					initialSession={session}
-					sideOffset={4}
-				/>
-			</SidebarFooter>
+			{session ? (
+				<SidebarFooter>
+					<UserButton
+						align="start"
+						className="w-full justify-start"
+						initialSession={session}
+						sideOffset={4}
+					/>
+				</SidebarFooter>
+			) : null}
 			<SidebarRail />
 		</Sidebar>
 	);

@@ -222,18 +222,6 @@ export function MagicLink({
 					</CardFooter>
 				)}
 			</Card>
-
-			<div className="hidden w-full flex-col gap-y-4 px-px py-6 text-center text-muted-foreground text-sm md:flex md:flex-row md:justify-between">
-				<div>© 2026</div>
-				<div className="space-x-4">
-					<a className="underline underline-offset-4" href="/terms">
-						Terms
-					</a>
-					<a className="underline underline-offset-4" href="/privacy">
-						Privacy
-					</a>
-				</div>
-			</div>
 		</div>
 	);
 }

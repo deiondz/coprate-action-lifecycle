@@ -1,220 +1,82 @@
-# Nevin
+# Corporate Action Lifecycle Monitor
 
-Nevin is an opinionated default product template for my projects. It is built for auth-first Next.js apps and comes with Better Auth, MongoDB, TanStack Query, Tailwind CSS, coss/shadcn-style UI primitives, Phosphor icons, theme support, and account settings screens already wired.
+Track Indian listed-company corporate actions as persistent, source-linked lifecycles instead of a flat announcement feed.
 
-Use it when you want to start with the boring product plumbing in place: sign in, sign up, passkeys, magic links, social providers, account settings, organization-ready UI pieces, API keys, toasts, query caching, and a database boundary that can be swapped later.
+The product has two services:
 
-## What Is Included
+- A Next.js frontend where a user adds NSE/BSE symbols and reviews reconstructed lifecycles.
+- A Hono backend that uses the official `drishti-sdk`, stores filings and lifecycle documents in MongoDB, performs REST catch-up, and listens for near-live announcement updates over WebSocket.
 
-- Next.js App Router with React 19 and TypeScript.
-- Better Auth server setup at `src/lib/auth.ts`.
-- Auth API route at `src/app/api/auth/[...all]/route.ts`.
-- Auth screens under `src/app/auth/[path]/page.tsx`.
-- Protected settings screens under `src/app/settings/[path]/page.tsx`.
-- Better Auth UI components in `src/components/auth`.
-- MongoDB auth adapter in `src/infrastructure/database/mongo/mongo-auth-database-adapter.ts`.
-- Mongoose database service behind a small application port.
-- Hexagonal mail port with ZeptoMail adapter and console fallback for local/dev.
-- Optional legacy Drizzle/Neon helper in `src/lib/db.ts`.
-- TanStack Query provider and devtools in `src/components/providers.tsx`.
-- Theme support through `src/components/theme-provider.tsx`.
-- coss/shadcn-style UI primitives in `src/components/ui`.
-- Biome for linting and formatting.
-- Envin-based environment validation in `env.config.ts`.
+## Run with Docker
 
-## Mail
+Create a root `.env` containing your server-side Drishti key:
 
-Transactional email is behind a hexagonal `MailService` port:
+```env
+DRISHTI_API_KEY=your-key
+```
 
-- Port: `src/application/ports/outbound/mail-service.ts`
-- ZeptoMail adapter: `src/infrastructure/mail/zeptomail/`
-- Console fallback: `src/infrastructure/mail/console/` (used when ZeptoMail env is missing)
-- Composition: `src/composition/mail-container.ts` — swap providers here
-- Better Auth UI templates: `src/infrastructure/mail/templates/auth-emails.tsx`
-- Auth wiring: verification, password reset, and magic link in `src/lib/auth.ts`
+Then run:
 
-Env vars (optional for local/dev; required for live send):
+```bash
+docker compose up --build
+```
 
-- `ZEPTOMAIL_TOKEN`
-- `ZEPTOMAIL_FROM_EMAIL`
-- `ZEPTOMAIL_FROM_NAME` (default `Nevin`)
-- `APP_NAME` (default `Nevin`, used in email branding)
+Open `http://localhost:3000`. The API health endpoint is available at `http://localhost:4000/health`.
 
-Verify the sending domain in ZeptoMail before using a production sender address.
+If `MONGODB_URI` is not set, Compose starts MongoDB and persists it in the `mongo-data` volume. Set `MONGODB_URI` to use an existing MongoDB deployment instead. The API still starts without a Drishti key in a clearly reported `not_configured` state, but adding symbols and live ingestion require the key.
 
-### Todo (mail follow-ups)
-
-- Welcome / OTP / org-invite / password-changed templates (available in `@better-auth-ui/react/email`, not wired yet)
-- Local email preview / playground route
-
-## Tech Stack
-
-- Runtime and package manager: Bun 1.3.13
-- Framework: Next.js 16
-- Language: TypeScript
-- UI: Tailwind CSS 4, Base UI, coss/shadcn-style components, Phosphor icons
-- Auth: Better Auth, Better Auth UI, passkeys, magic links, multi-session support
-- Database: MongoDB and Mongoose by default
-- Server state: TanStack Query
-- Validation: Zod and envin
-- Code quality: Biome
-
-## Quick Start
-
-Install dependencies:
+## Run locally
 
 ```bash
 bun install
+bun run dev:api
 ```
 
-Create a local environment file:
+In another terminal:
 
 ```bash
-cp .env.example .env.local
+bun run dev
 ```
 
-Run the app:
+Relevant environment variables:
 
-```bash
-bun dev
+```env
+DRISHTI_API_KEY=your-key
+MONGODB_URI=mongodb://localhost:27017/corporate_actions
+API_INTERNAL_URL=http://localhost:4000
+PUBLIC_API_URL=http://localhost:4000
 ```
 
-Open `http://localhost:3000`.
+The existing auth routes also use the Better Auth and MongoDB variables documented in `.env.example`; they are not required for the public monitor screen.
 
-## Environment
+## API
 
-Required:
-
-```bash
-MONGODB_URI="mongodb://localhost:27017/nevin"
-MONGODB_MAX_POOL_SIZE="10"
-BETTER_AUTH_SECRET="replace-with-at-least-32-characters"
-```
-
-Optional:
-
-```bash
-BETTER_AUTH_URL="http://localhost:3000"
-DATABASE_URL="postgresql://user:password@host:5432/database"
-SKIP_ENV_VALIDATION="true"
-```
-
-`DATABASE_URL` is only needed if you import `src/lib/db.ts`. The main template path uses MongoDB.
-
-Social login providers are enabled when both client credentials for that provider exist in the environment. For example:
-
-```bash
-GITHUB_CLIENT_ID="..."
-GITHUB_CLIENT_SECRET="..."
-GOOGLE_CLIENT_ID="..."
-GOOGLE_CLIENT_SECRET="..."
-```
-
-Provider-specific options are also supported for GitLab, Microsoft, Paybin, PayPal, Salesforce, Cognito, and TikTok. See `env.config.ts` and `src/lib/auth-social-providers.ts`.
-
-## Scripts
-
-```bash
-bun dev
-bun run build
-bun run start
-bun run lint
-bun run format
-bun run env:validate
-bun run env:preview
-```
-
-`env:validate` checks the environment with `env.config.ts`. `env:preview` starts an envin-backed preview on port `3001`.
-
-## Project Structure
+Interactive Scalar documentation is served at `http://localhost:4000/docs`. The OpenAPI 3.1 document is available at `http://localhost:4000/openapi.json` for SDK generation and external integrations.
 
 ```text
-src/app                         App Router routes
-src/app/api/auth/[...all]        Better Auth API endpoint
-src/app/auth/[path]              Sign in, sign up, reset, and magic-link views
-src/app/settings/[path]          Protected account and security settings
-src/components/auth              Auth and account UI
-src/components/ui                Shared UI primitives
-src/composition                  Server-side composition roots
-src/application/ports            Application-facing interfaces
-src/infrastructure/database      MongoDB implementations
-src/lib                          Auth, query, env-backed helpers
-src/styles/app.css               Tailwind and design tokens
+GET    /health
+GET    /api/symbols
+POST   /api/symbols                 { "symbol": "TCS" }
+DELETE /api/symbols/:symbol
+POST   /api/symbols/:symbol/sync
+GET    /api/lifecycles
+GET    /api/lifecycles/:id
+GET    /api/announcements/:id/source
+GET    /openapi.json
+GET    /docs
 ```
 
-## Auth Model
+When a symbol is added, the backend validates it through Drishti symbol metadata, retrieves announcement pages backward through the most recent corporate action, deduplicates by announcement ID, reconstructs action-type-specific lifecycles, and updates its WebSocket subscription. If no corporate action is found, the backfill continues to the end of the available announcement history. Reconnects trigger the same REST catch-up because the live stream is not treated as a replay buffer.
 
-Better Auth is configured in `src/lib/auth.ts`.
+## Verification
 
-Enabled by default:
-
-- Email and password auth.
-- Magic links. In development, links are logged with `console.info`.
-- Passkeys.
-- Multi-session support.
-- User deletion.
-- Runtime social-provider registration based on environment variables.
-
-The client auth instance lives in `src/lib/auth-client.ts`. The app-level provider is mounted in `src/components/providers.tsx`, where auth UI plugins, TanStack Query, toasts, and navigation are connected.
-
-## Database Model
-
-Nevin uses MongoDB as the default database path.
-
-- Better Auth gets its adapter from `src/composition/auth-database-container.ts`.
-- The adapter implementation is in `src/infrastructure/database/mongo/mongo-auth-database-adapter.ts`.
-- General database access goes through `DatabaseService` in `src/application/ports/outbound/database-service.ts`.
-- The current implementation is `MongoDatabaseService`.
-- `connectDatabase()` is the server-side entry point for application code that needs a database connection.
-
-Example:
-
-```typescript
-import { connectDatabase } from "@/composition/database-container";
-
-await connectDatabase();
+```bash
+bun test
+bunx tsc --noEmit
+bun run lint
+bun run build
+docker compose config
+docker compose build
 ```
 
-The old Drizzle/Neon helper remains in `src/lib/db.ts` for teams that still need it. It intentionally throws if `DATABASE_URL` is missing.
-
-## UI System
-
-The UI layer uses Tailwind CSS 4 with generated design tokens in `src/styles/app.css`. Shared primitives live in `src/components/ui` and follow the coss/shadcn component style. Use those primitives first before adding new component libraries.
-
-Rules of thumb:
-
-- Keep app-specific components outside `src/components/ui`.
-- Keep shared primitives small and reusable.
-- Use Phosphor icons from `@phosphor-icons/react/dist/ssr` for icon buttons.
-- Put auth-specific UI under `src/components/auth`.
-- Keep server-only code out of client components.
-
-## Development Notes
-
-- The TypeScript alias `@/*` maps to `src/*`.
-- Biome ignores generated auth schema, UI primitives, SVGs, `.next`, and `node_modules`.
-- Next metadata is set in `src/app/layout.tsx`.
-- The home page currently renders `UserButton` as a small smoke test for auth wiring.
-- Settings pages require a valid session and redirect unauthenticated users to sign in.
-
-## Open Source Status
-
-This repository is prepared to be run as an open-source template, but no license is included yet. Add a `LICENSE` file before publishing it publicly. Until then, assume the code is not licensed for reuse outside the project owner.
-
-Open-source project docs:
-
-- [Contributing](./CONTRIBUTING.md)
-- [Discussions](./DISCUSSIONS.md)
-- [Security](./SECURITY.md)
-- [Code of Conduct](./CODE_OF_CONDUCT.md)
-
-## Roadmap
-
-- Add a real landing or dashboard route after the product direction is chosen.
-- Add tests for auth redirects, provider rendering, and database connection behavior.
-- Decide whether Drizzle/Neon should stay as an optional path or be removed.
-- Add a license before public release.
-
-## Maintainer Notes
-
-Keep this template boring on purpose. New features should either support most product apps or live behind clear boundaries. Avoid turning the default template into a demo app with product-specific assumptions.
+Tests cover rights-issue grouping, term changes, incomplete extraction, ambiguous matching, symbol validation, API responses, and announcement deduplication.

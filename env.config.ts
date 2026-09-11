@@ -8,6 +8,8 @@ const env = defineEnv({
 			.default("development"),
 	},
 	server: {
+		API_INTERNAL_URL: z.string().url().default("http://localhost:4000"),
+		PUBLIC_API_URL: z.string().url().default("http://localhost:4000"),
 		DATABASE_URL: z
 			.string()
 			.url()

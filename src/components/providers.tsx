@@ -12,14 +12,15 @@ import { passkeyPlugin } from "@/lib/auth/passkey-plugin";
 import { authClient } from "@/lib/auth-client";
 import { getQueryClient } from "@/lib/query-client";
 import { AuthProvider } from "./auth/auth-provider";
-import { ErrorToaster } from "./auth/error-toaster";
 import { Toaster } from "./ui/sonner";
 
 export function Providers({
 	children,
+	emailDeliveryEnabled,
 	socialProviders,
 }: {
 	children: ReactNode;
+	emailDeliveryEnabled: boolean;
 	socialProviders: SocialProvider[];
 }) {
 	const router = useRouter();
@@ -29,17 +30,25 @@ export function Providers({
 		<QueryClientProvider client={queryClient}>
 			<AuthProvider
 				authClient={authClient}
+				emailAndPassword={{
+					enabled: emailDeliveryEnabled,
+					forgotPassword: emailDeliveryEnabled,
+					requireEmailVerification: emailDeliveryEnabled,
+				}}
 				redirectTo="/"
 				socialProviders={socialProviders}
 				navigate={({ to, replace }) =>
 					replace ? router.replace(to) : router.push(to)
 				}
-				plugins={[deleteUserPlugin(), magicLinkPlugin(), passkeyPlugin()]}
+				plugins={[
+					deleteUserPlugin(),
+					...(emailDeliveryEnabled ? [magicLinkPlugin()] : []),
+					passkeyPlugin(),
+				]}
 				Link={Link}
 			>
 				{children}
 
-				<ErrorToaster />
 				<Toaster />
 			</AuthProvider>
 			<ReactQueryDevtools initialIsOpen={false} />

@@ -4,6 +4,7 @@ import env from "@/../env.config";
 import type { MailService } from "@/application/ports/outbound/mail-service";
 import { ConsoleMailService } from "@/infrastructure/mail/console/console-mail-service";
 import { ZeptoMailMailService } from "@/infrastructure/mail/zeptomail/zeptomail-mail-service";
+import { isZeptoMailConfigured } from "@/lib/email-delivery";
 
 let mailService: MailService | undefined;
 let didWarnConsoleFallback = false;
@@ -12,7 +13,7 @@ function createMailService(): MailService {
 	const token = env.ZEPTOMAIL_TOKEN;
 	const fromEmail = env.ZEPTOMAIL_FROM_EMAIL;
 
-	if (token && fromEmail) {
+	if (isZeptoMailConfigured() && token && fromEmail) {
 		return new ZeptoMailMailService({
 			token,
 			fromEmail,
