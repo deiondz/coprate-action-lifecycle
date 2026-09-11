@@ -1,6 +1,6 @@
 # Code Of Conduct
 
-Nevin should be a useful place to build and discuss software. Keep the tone direct, respectful, and focused on the work.
+This project should be a useful place to build and discuss software. Keep the tone direct, respectful, and focused on the work.
 
 ## Expected Behavior
 
@@ -8,7 +8,7 @@ Nevin should be a useful place to build and discuss software. Keep the tone dire
 - Assume good intent until there is evidence otherwise.
 - Give feedback on code, docs, behavior, and trade-offs.
 - Respect maintainers' time by reading existing docs and issues first.
-- Accept that a default template should stay small and broadly useful.
+- Help keep the template understandable and broadly useful.
 
 ## Unacceptable Behavior
 

@@ -1,60 +1,96 @@
 # Corporate Action Lifecycle Monitor
 
-Track Indian listed-company corporate actions as persistent, source-linked lifecycles instead of a flat announcement feed.
+An open-source Drishti template for turning Indian exchange filings into persistent, source-linked corporate-action lifecycles.
 
-The product has two services:
+The project combines a Next.js dashboard, a Hono API, MongoDB persistence, REST catch-up, and WebSocket updates. Every stage and material change remains linked to its source filing.
 
-- A Next.js frontend where a user adds NSE/BSE symbols and reviews reconstructed lifecycles.
-- A Hono backend that uses the official `drishti-sdk`, stores filings and lifecycle documents in MongoDB, performs bounded REST backfills, and listens for near-live announcement updates over WebSocket.
+## What it tracks
 
-Continuous updates are WebSocket-only on both legs: Drishti to the backend and the backend to the browser. REST is used for initial history, reconnect-gap recovery, symbol verification, and explicit manual synchronization; there is no scheduled polling.
+- Bonus Issue
+- Buyback
+- Conversion of Warrants
+- De-listing
+- Demerger
+- Dividend
+- Issue of Securities
+- Merger
+- Offer for Sale (OFS)
+- Redemption of Securities
+- Rights Issue
+- Stock Split
 
-## Run with Docker
+Lifecycle reconstruction is deterministic and filing-derived. Optional AI validation is advisory only and never changes stages, dates, terms, or grouping.
 
-Create a root `.env` containing your server-side Drishti key:
+## Quick start with Docker
 
-```env
-DRISHTI_API_KEY=your-key
+Requirements: Docker and a [Drishti API key](https://drishti.manasija.in).
+
+```bash
+cp .env.example .env
 ```
 
-Then run:
+Set `DRISHTI_API_KEY` in `.env`, then run:
 
 ```bash
 docker compose up --build
 ```
 
-Open `http://localhost:3000`. The API health endpoint is available at `http://localhost:4000/health`.
+Open:
 
-If `MONGODB_URI` is not set, Compose starts MongoDB and persists it in the `mongo-data` volume. Set `MONGODB_URI` to use an existing MongoDB deployment instead. The API still starts without a Drishti key in a clearly reported `not_configured` state, but adding symbols and live ingestion require the key.
+- Dashboard: `http://localhost:3000`
+- API documentation: `http://localhost:4000/docs`
+- API health: `http://localhost:4000/health`
 
-## Run locally
+MongoDB starts automatically and stores data in the `mongo-data` volume.
+
+## Local development
+
+Requirements: Bun 1.3+, Node.js 24+, and MongoDB.
 
 ```bash
 bun install
+cp .env.example .env
 bun run dev:api
 ```
 
-In another terminal:
+In a second terminal:
 
 ```bash
 bun run dev
 ```
 
-Relevant environment variables:
+The API can start without `DRISHTI_API_KEY`, but ingestion and symbol validation remain disabled until the key is configured.
 
-```env
-DRISHTI_API_KEY=your-key
-MONGODB_URI=mongodb://localhost:27017/corporate_actions
-API_INTERNAL_URL=http://localhost:4000
-PUBLIC_API_URL=http://localhost:4000
-NEXT_PUBLIC_LIFECYCLE_WS_URL=ws://localhost:4000/ws/lifecycles
+## Configuration
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DRISHTI_API_KEY` | For live data | Server-side access to Drishti REST and WebSocket APIs |
+| `MONGODB_URI` | No | MongoDB connection; defaults to local MongoDB |
+| `MONGODB_MAX_POOL_SIZE` | No | Maximum MongoDB pool size; defaults to `10` |
+| `API_INTERNAL_URL` | No | API address used by the Next.js rewrite |
+| `PUBLIC_API_URL` | No | Public API URL shown in OpenAPI metadata |
+| `FRONTEND_ORIGIN` | No | Allowed browser origin for API and WebSocket access |
+| `NEXT_PUBLIC_LIFECYCLE_WS_URL` | No | Browser-facing lifecycle WebSocket URL |
+| `OPENROUTER_API_KEY` | No | Enables advisory validation through OpenRouter |
+
+When `OPENROUTER_API_KEY` exists, the server uses `deepseek/deepseek-v4-flash-0731:nitro` through the OpenAI SDK. Provider failures or invalid output leave the deterministic lifecycle unchanged and produce no AI badge.
+
+Never expose either API key through a `NEXT_PUBLIC_` variable.
+
+## How it works
+
+```text
+Drishti REST catch-up ─┐
+                      ├─> filing store ─> deterministic lifecycle engine ─> MongoDB
+Drishti WebSocket ────┘                                      │
+                                                            ├─> Hono REST API
+                                                            └─> browser WebSocket
 ```
 
-The existing auth routes also use the Better Auth and MongoDB variables documented in `.env.example`; they are not required for the public monitor screen.
+REST handles initial history, explicit synchronization, and reconnect-gap recovery. WebSockets handle continuous updates. Announcement-ID upserts keep overlapping recovery windows idempotent.
 
 ## API
-
-Interactive Scalar documentation is served at `http://localhost:4000/docs`. The OpenAPI 3.1 document is available at `http://localhost:4000/openapi.json` for SDK generation and external integrations.
 
 ```text
 GET    /health
@@ -70,24 +106,44 @@ GET    /openapi.json
 GET    /docs
 ```
 
-When a symbol is added, the backend validates it through Drishti symbol metadata, updates the active WebSocket subscription, and exhausts every available detailed announcement page through a fixed cutoff. Later reconnects fetch only from the persisted announcement watermark minus a ten-minute safety overlap. Announcement-ID upserts make that overlap idempotent.
+## Make it your own
 
-The version-two lifecycle collection exposes Bonus Issue, Buyback, Rights Issue, Stock Split, Merger, and Demerger. One filing can update multiple lifecycles. Other announcement categories remain in the source collection for audit and future replay but are not promoted to visible lifecycles.
+The main customization points are:
 
-The browser socket sends an initial snapshot followed by lifecycle upserts, deletions, stream states, and heartbeats. `NEXT_PUBLIC_LIFECYCLE_WS_URL` is a build-time Next.js variable; production builds must set it to the public `wss://` endpoint.
+- `apps/api/src/domain.ts` — action definitions, stages, matching, and term normalization
+- `apps/api/src/lifecycle-service.ts` — synchronization and rebuild pipeline
+- `apps/api/src/lifecycle-validator.ts` — optional advisory validation
+- `packages/contracts/src/index.ts` — shared API and UI types
+- `src/components/corporate-action-dashboard.tsx` — dashboard behavior and presentation
+- `src/styles/app.css` — theme tokens and global styling
+
+Fork the project, change the action maps or interface, replace MongoDB behind the repository contract, or consume the API from another client.
 
 ## Verification
 
 ```bash
-bun test
-bunx tsc --noEmit
+bun run env:validate
 bun run lint
+bun run typecheck
+bun test
 bun run build
 docker compose config
-docker compose build
-
-# Optional: replay exported announcement category files
-bun run profile:announcements -- C:/path/to/announcement_exports
 ```
 
-Tests cover full pagination, bounded recovery windows, stream-before-backfill ordering, live socket broadcasts, core-six multi-action classification, term provenance, failed extraction, stable ID reuse, symbol validation, and API responses.
+## Project structure
+
+```text
+apps/api/             Hono API, ingestion, persistence, lifecycle engine
+packages/contracts/   Shared TypeScript contracts
+src/app/              Next.js app entry points
+src/components/       Dashboard and small UI primitives
+src/styles/           Global theme and layout styles
+```
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report security issues using [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).

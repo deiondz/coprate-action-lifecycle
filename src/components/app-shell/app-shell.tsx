@@ -1,43 +1,32 @@
-"use client";
+import Image from "next/image";
 
-import type { User as BetterAuthUser } from "better-auth";
-import type { ReactNode } from "react";
-
-import { UserButton } from "@/components/auth/user/user-button";
 import { CorporateActionDashboard } from "@/components/corporate-action-dashboard";
-import { Signature } from "@/components/signature";
 
-export function AppShell({
-	session,
-	breadcrumbPage = "Monitor",
-	children,
-}: {
-	session?: {
-		user: BetterAuthUser & {
-			username?: string | null;
-			displayUsername?: string | null;
-		};
-	};
-	breadcrumbPage?: string;
-	children?: ReactNode;
-}) {
+export function AppShell() {
 	return (
 		<div className="flex min-h-svh w-full flex-col bg-panel">
-			<header data-page={breadcrumbPage} className="border-b border-hairline">
+			<header className="border-b border-hairline">
 				<div className="mx-auto flex h-14 w-full max-w-[1180px] items-center justify-between px-5 sm:px-8">
-					<div className="flex items-center text-ink">
-						<Signature
-							text="Drishti"
-							color="currentColor"
-							fontSize={48}
-							duration={0.65}
-							className="h-8 w-auto overflow-visible"
-						/>
+					<div className="flex items-center gap-2.5 text-ink">
+						<Image src="/logo.svg" alt="" width={28} height={20} priority />
+						<div>
+							<p className="text-[13px] font-medium leading-none">Drishti</p>
+							<p className="mt-1 text-[9.5px] uppercase tracking-[0.1em] text-ink-3">
+								Corporate action lifecycles
+							</p>
+						</div>
 					</div>
-					<UserButton align="end" initialSession={session} size="icon" />
+					<a
+						href="https://github.com/manasijatech/drishti-templates/tree/main/corporate-action-lifecycle-monitor"
+						target="_blank"
+						rel="noreferrer"
+						className="text-[11px] font-medium text-ink-3 transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+					>
+						View source
+					</a>
 				</div>
 			</header>
-			{children ?? <CorporateActionDashboard />}
+			<CorporateActionDashboard />
 		</div>
 	);
 }

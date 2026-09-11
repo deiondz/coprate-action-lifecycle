@@ -2,8 +2,7 @@
 
 # dependencies
 
-/node_modules
-bun.lock
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,6 +14,7 @@ bun.lock
 # testing
 /coverage
 /data/
+/.cache/
 
 # next.js
 /.next/

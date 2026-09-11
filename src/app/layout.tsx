@@ -6,8 +6,6 @@ import "@/styles/app.css";
 
 import { Providers } from "@/components/providers";
 import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
-import { getEnabledSocialProviderIds } from "@/lib/auth-social-providers";
-import { isZeptoMailConfigured } from "@/lib/email-delivery";
 import { cn } from "@/lib/utils";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist-sans" });
@@ -41,9 +39,6 @@ export default function RootLayout({
 }: Readonly<{
 	children: ReactNode;
 }>) {
-	const socialProviders = getEnabledSocialProviderIds();
-	const emailDeliveryEnabled = isZeptoMailConfigured();
-
 	return (
 		<html
 			lang="en"
@@ -61,16 +56,11 @@ export default function RootLayout({
 			<body className="antialiased min-h-svh flex flex-col">
 				<ThemeProvider
 					attribute="class"
-					defaultTheme="light"
+					defaultTheme="system"
 					enableSystem
 					disableTransitionOnChange
 				>
-					<Providers
-						emailDeliveryEnabled={emailDeliveryEnabled}
-						socialProviders={socialProviders}
-					>
-						{children}
-					</Providers>
+					<Providers>{children}</Providers>
 				</ThemeProvider>
 			</body>
 		</html>

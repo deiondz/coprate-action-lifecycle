@@ -40,10 +40,6 @@ services:
       args:
         API_INTERNAL_URL: http://api:4000
         NEXT_PUBLIC_LIFECYCLE_WS_URL: ${NEXT_PUBLIC_LIFECYCLE_WS_URL:-ws://localhost:4000/ws/lifecycles}
-    environment:
-      BETTER_AUTH_SECRET: local-docker-secret-change-before-production
-      BETTER_AUTH_URL: http://localhost:3000
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/corporate_actions}
     depends_on:
       api:
         condition: service_healthy
