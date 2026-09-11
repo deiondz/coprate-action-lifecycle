@@ -14,14 +14,19 @@ type AnnouncementPage = {
 };
 
 function marketWithPages(pages: AnnouncementPage[], requestedPages: number[]) {
-	return new DrishtiMarketDataSource({
-		apiKey: "test-key",
-		fetchImpl: async (input) => {
+	const fetchImpl = Object.assign(
+		async (input: RequestInfo | URL) => {
 			const url = new URL(String(input));
 			const page = Number(url.searchParams.get("page"));
 			requestedPages.push(page);
 			return Response.json(pages[page - 1]);
 		},
+		{ preconnect: (_url: string | URL) => undefined },
+	);
+
+	return new DrishtiMarketDataSource({
+		apiKey: "test-key",
+		fetchImpl,
 	});
 }
 
