@@ -4,6 +4,13 @@ An open-source Drishti template for turning Indian exchange filings into persist
 
 The project combines a Next.js dashboard, a Hono API, MongoDB persistence, REST catch-up, and WebSocket updates. Every stage and material change remains linked to its source filing.
 
+[Drishti](https://drishti.manasija.in) is an Indian stock market API for
+structured company context, exchange announcements, earnings, conference calls,
+news, and event-driven workflows. This template uses its REST and WebSocket
+interfaces to keep corporate-action records traceable to the original filing.
+See the [Drishti API documentation](https://developers.manasija.in/docs) for
+integration and authentication details.
+
 ## What it tracks
 
 - Bonus Issue
